@@ -27,6 +27,17 @@ export function AppLayout({ onSwitchProject }: AppLayoutProps) {
   const isDraggingLeft = useRef(false)
   const isDraggingRight = useRef(false)
   const containerRef = useRef<HTMLDivElement>(null)
+  const xecmConfig = useWikiStore((s) => s.xecmConfig)
+  const [showXecmBanner, setShowXecmBanner] = useState(false)
+
+  // Show banner briefly when xECM becomes connected
+  useEffect(() => {
+    if (xecmConfig.enabled && xecmConfig.workspaceName) {
+      setShowXecmBanner(true)
+      const t = setTimeout(() => setShowXecmBanner(false), 5000)
+      return () => clearTimeout(t)
+    }
+  }, [xecmConfig.enabled, xecmConfig.workspaceName])
 
   const loadFileTree = useCallback(async () => {
     if (!project) return
@@ -98,6 +109,15 @@ export function AppLayout({ onSwitchProject }: AppLayoutProps) {
     // it fills the rest of the viewport.
     <div className="flex h-full flex-col bg-background text-foreground">
       <UpdateBanner />
+      {/* xECM connection banner */}
+      {xecmConfig.enabled && xecmConfig.workspaceName && showXecmBanner && (
+        <div className="shrink-0 bg-green-50 border-b border-green-200 px-4 py-2 text-center text-sm text-green-700 dark:bg-green-950 dark:border-green-800 dark:text-green-300">
+          xECM: Connected to {xecmConfig.workspaceName}
+          <button className="ml-2 underline" onClick={() => setShowXecmBanner(false)}>
+            Dismiss
+          </button>
+        </div>
+      )}
       <div className="flex min-h-0 flex-1">
         <IconSidebar onSwitchProject={onSwitchProject} />
         <div ref={containerRef} className="flex min-w-0 flex-1 overflow-hidden">
