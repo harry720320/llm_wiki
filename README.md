@@ -38,7 +38,8 @@
 - **Vector Semantic Search** — optional embedding-based retrieval via LanceDB, supports any OpenAI-compatible endpoint
 - **Persistent Ingest Queue** — serial processing with crash recovery, cancel, retry, and progress visualization
 - **Folder Import** — recursive folder import preserving directory structure, folder context as LLM classification hint
-- **Source Folder Auto-Watch** — detects external changes in `raw/sources/` and keeps ingest/delete cleanup in sync
+- **Source Folder Auto-Watch** — detects external changes in `raw/sources/` and keeps ingest/delete cleanup in sync; supports local filesystem watch (notify) and xECM poll-based watch for enterprise content servers
+- **xECM (Extended ECM) Integration** — connect to OpenText Content Server repositories, browse and ingest documents directly from enterprise workspaces with on-demand content fetching and MD5-based caching
 - **Deep Research** — LLM-optimized search topics, multi-query web search via Tavily, SerpApi, or SearXNG, auto-ingest results into wiki
 - **Async Review System** — LLM flags items for human judgment, predefined actions, pre-generated search queries
 - **Chrome Web Clipper** — one-click web page capture with auto-ingest into knowledge base
@@ -350,6 +351,21 @@ The original is platform-agnostic (abstract pattern). We handle concrete cross-p
 - **15-minute timeout** — long ingest operations won't fail prematurely
 - **dataVersion signaling** — graph and UI automatically refresh when wiki content changes
 
+### 19. xECM (Extended ECM) Integration
+
+Connect LLM Wiki directly to OpenText Extended ECM (Content Server) repositories:
+
+- **Authenticated access** — connect with username/password or ticket-based authentication to any xECM/OTCS instance via the REST API
+- **Virtual `raw/sources/`** — xECM documents appear as files under `raw/sources/` without local download; content is fetched on-demand with MD5-based caching
+- **Poll-based change detection** — configurable polling interval (minimum 10 seconds) detects new, modified, and deleted documents by comparing recursive snapshots
+- **Path-to-node resolution** — transparently maps file paths to xECM node IDs with in-memory caching for fast repeated lookups
+- **Recursive snapshot** — iterative tree walk (stack-based, no recursion limits) creates a full `HashMap<u64, XecmNode>` for change detection
+- **Read-only enforcement** — xECM files cannot be deleted or modified from within LLM Wiki; manage content in xECM directly
+- **Full extract pipeline** — PDF and Office documents from xECM go through the same text extraction pipeline as local files (pdfium + office_oxide)
+- **Take/restore state pattern** — `XecmClient` is temporarily taken out of `AppState` for async operations and restored after each call, keeping the MutexGuard from crossing `.await` boundaries
+
+Configure in **Settings → Source Watch** by providing the xECM server URL, workspace name, and credentials. When an xECM project is opened, LLM Wiki automatically hydrates the config and starts the poll watcher.
+
 ## Tech Stack
 
 | Layer | Technology |
@@ -367,6 +383,7 @@ The original is platform-agnostic (abstract pattern). We handle concrete cross-p
 | State | Zustand |
 | LLM | Streaming fetch (OpenAI, Anthropic, Google, Ollama, Custom) |
 | Web Search | Tavily, SerpApi, SearXNG JSON API |
+| xECM | OpenText Content Server REST API (OTCSTicket auth) |
 
 ## Installation
 
@@ -440,7 +457,7 @@ my-wiki/
 ├── purpose.md              # Goals, key questions, research scope
 ├── schema.md               # Wiki structure rules, page types
 ├── raw/
-│   ├── sources/            # Uploaded documents (immutable)
+│   ├── sources/            # Uploaded documents (immutable), or virtualized via xECM
 │   └── assets/             # Local images
 ├── wiki/
 │   ├── index.md            # Content catalog
