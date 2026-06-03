@@ -193,6 +193,16 @@ export interface GeneralConfig {
   closeBehavior: CloseBehavior
 }
 
+export interface XecmConfig {
+  enabled: boolean
+  baseUrl: string
+  workspaceName: string
+  workspaceNodeId: number
+  username: string
+  ticket: string | null
+  pollIntervalSeconds: number
+}
+
 interface SourceWatchConfig {
   enabled: boolean
   autoIngest: boolean
@@ -313,6 +323,7 @@ interface WikiState {
   sourceWatchConfig: SourceWatchConfig
   apiConfig: ApiConfig
   generalConfig: GeneralConfig
+  xecmConfig: XecmConfig
   dataVersion: number
 
   setProject: (project: WikiProject | null) => void
@@ -335,6 +346,7 @@ interface WikiState {
   setSourceWatchConfig: (config: SourceWatchConfig) => void
   setApiConfig: (config: ApiConfig) => void
   setGeneralConfig: (config: GeneralConfig) => void
+  setXecmConfig: (config: XecmConfig) => void
   bumpDataVersion: () => void
 }
 
@@ -445,6 +457,16 @@ export const useWikiStore = create<WikiState>((set) => ({
     closeBehavior: "ask",
   },
 
+  xecmConfig: {
+    enabled: false,
+    baseUrl: "",
+    workspaceName: "",
+    workspaceNodeId: 0,
+    username: "",
+    ticket: null,
+    pollIntervalSeconds: 30,
+  },
+
   setLlmConfig: (llmConfig) => set({ llmConfig }),
   setProviderConfigs: (providerConfigs) => set({ providerConfigs }),
   setActivePresetId: (activePresetId) => set({ activePresetId }),
@@ -457,7 +479,8 @@ export const useWikiStore = create<WikiState>((set) => ({
   setSourceWatchConfig: (sourceWatchConfig) => set({ sourceWatchConfig }),
   setApiConfig: (apiConfig) => set({ apiConfig }),
   setGeneralConfig: (generalConfig) => set({ generalConfig }),
+  setXecmConfig: (xecmConfig) => set({ xecmConfig }),
   bumpDataVersion: () => set((state) => ({ dataVersion: state.dataVersion + 1 })),
 }))
 
-export type { WikiState, LlmConfig, SearchApiConfig, EmbeddingConfig, MultimodalConfig, OutputLanguage, ProxyConfig, ScheduledImportConfig, SourceWatchConfig, ApiConfig }
+export type { WikiState, LlmConfig, SearchApiConfig, EmbeddingConfig, MultimodalConfig, OutputLanguage, ProxyConfig, ScheduledImportConfig, SourceWatchConfig, ApiConfig, XecmConfig, GeneralConfig }
