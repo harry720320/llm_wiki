@@ -5,6 +5,7 @@ mod panic_guard;
 mod proxy;
 mod tray;
 mod types;
+mod xecm_client;
 
 use panic_guard::run_guarded;
 use std::sync::Mutex;
