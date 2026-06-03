@@ -11,7 +11,11 @@ use panic_guard::run_guarded;
 use std::sync::Mutex;
 use tauri::Manager;
 
+use crate::xecm_client::{XecmClient, XecmConfig};
+
 struct CloseBehaviorState(Mutex<String>);
+
+struct XecmState(Mutex<Option<XecmClient>>);
 
 #[tauri::command]
 fn clip_server_status() -> String {
@@ -69,6 +73,57 @@ fn set_close_behavior(
         .map_err(|_| "Close behavior state is unavailable".to_string())?;
     *guard = normalized.clone();
     Ok(normalized)
+}
+
+/// Set/reset the active xECM client.
+#[tauri::command]
+fn set_xecm_config(
+    config: Option<XecmConfig>,
+    state: tauri::State<'_, XecmState>,
+) -> Result<String, String> {
+    let mut guard = state
+        .0
+        .lock()
+        .map_err(|_| "xECM state is unavailable".to_string())?;
+    match config {
+        Some(cfg) if cfg.enabled => {
+            *guard = Some(XecmClient::new(
+                cfg,
+                std::path::PathBuf::from(".llm-wiki/xecm-cache"),
+            ));
+            Ok("xECM client configured".to_string())
+        }
+        _ => {
+            *guard = None;
+            Ok("xECM client cleared".to_string())
+        }
+    }
+}
+
+/// Authenticate and list available workspaces.
+#[tauri::command]
+async fn xecm_connect(
+    base_url: String,
+    username: String,
+    password: String,
+) -> Result<Vec<serde_json::Value>, String> {
+    let ticket = XecmClient::authenticate(&base_url, &username, &password)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let workspaces = XecmClient::list_workspaces(&base_url, &ticket)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    Ok(workspaces
+        .into_iter()
+        .filter(|w| w.container)
+        .map(|w| serde_json::json!({
+            "name": w.name,
+            "id": w.id,
+            "type": w.type_,
+        }))
+        .collect())
 }
 
 fn close_behavior<R: tauri::Runtime>(window: &tauri::Window<R>) -> String {
@@ -129,6 +184,7 @@ pub fn run() {
             app.manage(commands::codex_cli::CodexCliState::default());
             app.manage(commands::file_sync::FileSyncState::default());
             app.manage(CloseBehaviorState(Mutex::new("ask".to_string())));
+            app.manage(XecmState(Mutex::new(None)));
             if let Err(err) = tray::create_tray(app.handle()) {
                 eprintln!("[tray] system tray unavailable, continuing without it: {err}");
             }
@@ -186,6 +242,8 @@ pub fn run() {
             commands::file_sync::ignore_file_change_task,
             set_proxy_env,
             set_close_behavior,
+            set_xecm_config,
+            xecm_connect,
         ])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
