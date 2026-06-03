@@ -218,7 +218,23 @@
       "interface": "Interface",
       "maintenance": "Maintenance",
       "changelog": "Changelog",
-      "about": "About"
+      "about": "About",
+      "xecm": "xECM Connection"
+    },
+    "xecm": {
+      "title": "xECM Connection",
+      "baseUrl": "Base URL",
+      "username": "Username",
+      "password": "Password",
+      "connect": "Connect",
+      "disconnect": "Disconnect",
+      "connectedTo": "Connected to {{workspace}} at {{url}}",
+      "selectWorkspace": "Select a workspace to use as your source layer:",
+      "workspaceType": "Type {{type}}",
+      "nodeId": "ID {{id}}",
+      "goBack": "Back",
+      "pollInterval": "Poll interval (seconds)",
+      "pollIntervalHint": "How often to check xECM for file changes. Minimum 10 seconds."
     },
     "sections": {
       "general": {

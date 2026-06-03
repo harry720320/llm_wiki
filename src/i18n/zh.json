@@ -218,7 +218,23 @@
       "interface": "界面",
       "maintenance": "维护",
       "changelog": "更新日志",
-      "about": "关于"
+      "about": "关于",
+      "xecm": "xECM 连接"
+    },
+    "xecm": {
+      "title": "xECM 连接",
+      "baseUrl": "服务器地址",
+      "username": "用户名",
+      "password": "密码",
+      "connect": "连接",
+      "disconnect": "断开连接",
+      "connectedTo": "已连接到 {{workspace}}（{{url}}）",
+      "selectWorkspace": "选择一个工作区作为源文件层：",
+      "workspaceType": "类型 {{type}}",
+      "nodeId": "ID {{id}}",
+      "goBack": "返回",
+      "pollInterval": "轮询间隔（秒）",
+      "pollIntervalHint": "检查 xECM 文件变更的频率。最少 10 秒。"
     },
     "sections": {
       "general": {

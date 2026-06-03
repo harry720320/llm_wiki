@@ -14,6 +14,7 @@ import {
   FolderSync,
   Server,
   Settings,
+  Cloud,
 } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import { invoke } from "@tauri-apps/api/core"
@@ -41,6 +42,7 @@ import { GeneralSection } from "./sections/general-section"
 import { ChangelogSection } from "./sections/changelog-section"
 import { MaintenanceSection } from "./sections/maintenance-section"
 import { AboutSection } from "./sections/about-section"
+import { XecmSection } from "./sections/xecm-section"
 
 type CategoryId =
   | "general"
@@ -56,6 +58,7 @@ type CategoryId =
   | "interface"
   | "maintenance"
   | "changelog"
+  | "xecm"
   | "about"
 
 interface Category {
@@ -81,6 +84,7 @@ const CATEGORIES: Category[] = [
   { id: "interface", labelKey: "settings.categories.interface", icon: Palette },
   { id: "maintenance", labelKey: "settings.categories.maintenance", icon: Wrench },
   { id: "changelog", labelKey: "settings.categories.changelog", icon: History },
+  { id: "xecm", labelKey: "settings.categories.xecm", icon: Cloud },
   { id: "about", labelKey: "settings.categories.about", icon: Info },
 ]
 
@@ -156,6 +160,12 @@ function initialDraft(
     closeBehavior: generalConfig.closeBehavior,
     uiLanguage,
     theme: theme ?? "system",
+    xecmEnabled: false,
+    xecmBaseUrl: "",
+    xecmWorkspaceName: "",
+    xecmWorkspaceNodeId: 0,
+    xecmUsername: "",
+    xecmPollIntervalSeconds: 30,
   }
 }
 
@@ -418,6 +428,36 @@ export function SettingsView() {
       console.warn("[api] failed to reload API server config cache:", err)
     }
 
+    // xECM config
+    const newXecm = {
+      enabled: draft.xecmEnabled,
+      baseUrl: draft.xecmBaseUrl.trim(),
+      workspaceName: draft.xecmWorkspaceName,
+      workspaceNodeId: draft.xecmWorkspaceNodeId,
+      username: draft.xecmUsername,
+      ticket: null as string | null,
+      pollIntervalSeconds: Math.max(10, Math.min(300, draft.xecmPollIntervalSeconds || 30)),
+    }
+    useWikiStore.getState().setXecmConfig(newXecm)
+    if (project) {
+      const { saveXecmConfig } = await import("@/lib/project-store")
+      await saveXecmConfig(newXecm, project.path)
+      // Push to Rust backend
+      if (newXecm.enabled && newXecm.workspaceNodeId > 0) {
+        await invoke("set_xecm_config", { config: newXecm }).catch((err) =>
+          console.error("[xecm] failed to set xECM config on Rust side:", err)
+        )
+        // Re-start file watcher with xECM poll mode
+        const { startProjectFileSync, stopProjectFileSync } = await import("@/lib/project-file-sync")
+        await stopProjectFileSync().catch(() => {})
+        await startProjectFileSync(project, useWikiStore.getState().sourceWatchConfig).catch((err) =>
+          console.error("[xecm] failed to restart file sync:", err)
+        )
+      } else {
+        await invoke("set_xecm_config", { config: { enabled: false } }).catch(() => {})
+      }
+    }
+
     const newGeneralConfig = {
       autostart: draft.autostart,
       closeBehavior: draft.closeBehavior,
@@ -502,6 +542,8 @@ export function SettingsView() {
         return <MaintenanceSection />
       case "changelog":
         return <ChangelogSection />
+      case "xecm":
+        return <XecmSection draft={draft} setDraft={setDraft} />
       case "about":
         return <AboutSection />
     }

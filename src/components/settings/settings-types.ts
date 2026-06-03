@@ -78,6 +78,14 @@ export interface SettingsDraft {
   apiEnabled: boolean
   apiAllowUnauthenticated: boolean
   apiToken: string
+
+  // xECM
+  xecmEnabled: boolean
+  xecmBaseUrl: string
+  xecmWorkspaceName: string
+  xecmWorkspaceNodeId: number
+  xecmUsername: string
+  xecmPollIntervalSeconds: number
 }
 
 export type DraftSetter = <K extends keyof SettingsDraft>(
