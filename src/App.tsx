@@ -258,30 +258,6 @@ function App() {
         } catch (err) {
           console.warn("[general] failed to sync autostart:", err)
         }
-        // Hydrate xECM config
-        try {
-          const { loadXecmConfig } = await import("@/lib/project-store")
-          const savedXecm = await loadXecmConfig(proj.path)
-          if (savedXecm?.enabled) {
-            useWikiStore.getState().setXecmConfig(savedXecm)
-            await invoke("set_xecm_config", { config: savedXecm })
-            console.log("[xecm] hydrated config for workspace", savedXecm.workspaceName)
-          } else {
-            // Clear xECM state when opening non-xECM project
-            useWikiStore.getState().setXecmConfig({
-              enabled: false,
-              baseUrl: "",
-              workspaceName: "",
-              workspaceNodeId: 0,
-              username: "",
-              ticket: null,
-              pollIntervalSeconds: 30,
-            })
-            await invoke("set_xecm_config", { config: { enabled: false } })
-          }
-        } catch (err) {
-          console.error("[xecm] failed to hydrate config:", err)
-        }
         const savedLang = await loadLanguage()
         if (savedLang) {
           await i18n.changeLanguage(savedLang)
@@ -438,6 +414,30 @@ function App() {
       }
     } catch {
       // ignore, start fresh
+    }
+
+    // Hydrate xECM config
+    try {
+      const { loadXecmConfig } = await import("@/lib/project-store")
+      const savedXecm = await loadXecmConfig(proj.path)
+      if (savedXecm?.enabled) {
+        useWikiStore.getState().setXecmConfig(savedXecm)
+        await invoke("set_xecm_config", { config: savedXecm })
+        console.log("[xecm] hydrated config for workspace", savedXecm.workspaceName)
+      } else {
+        useWikiStore.getState().setXecmConfig({
+          enabled: false,
+          baseUrl: "",
+          workspaceName: "",
+          workspaceNodeId: 0,
+          username: "",
+          ticket: null,
+          pollIntervalSeconds: 30,
+        })
+        await invoke("set_xecm_config", { config: { enabled: false } })
+      }
+    } catch (err) {
+      console.error("[xecm] failed to hydrate config:", err)
     }
   }
 

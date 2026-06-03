@@ -203,8 +203,26 @@ pub fn start_project_file_watcher(
     source_watch_config: Option<SourceWatchConfig>,
 ) -> Result<FileChangeRescanResult, String> {
     run_guarded("start_project_file_watcher", || {
-        let root = PathBuf::from(project_path);
+        let root = PathBuf::from(project_path.clone());
         let source_watch_config = normalize_source_watch_config(source_watch_config);
+        // If xECM is active, use poll watcher instead of notify
+        let auto_ingest = source_watch_config.auto_ingest;
+        let poll_interval = source_watch_config.poll_interval_secs.unwrap_or(30);
+        let xecm_active = app.state::<XecmState>().0.lock().ok().map(|g| g.is_some()).unwrap_or(false);
+        if xecm_active {
+            start_xecm_poll_watcher(
+                app.clone(),
+                project_id.clone(),
+                project_path,
+                poll_interval,
+                auto_ingest,
+            );
+            // Return an empty result — no local watcher needed
+            return Ok(FileChangeRescanResult {
+                queue: FileChangeQueue { version: 1, tasks: vec![] },
+                changed_tasks: vec![],
+            });
+        }
         let watcher_generation = WATCHER_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
         ensure_sync_dir(&root)?;
         with_queue_lock(&root, || reset_processing_tasks(&root, &project_id))?;
@@ -343,11 +361,10 @@ struct XecmSnapshotEntry {
 
 fn start_xecm_poll_watcher(
     app: AppHandle,
-    state: tauri::State<'_, XecmState>,
     project_id: String,
     project_path: String,
     poll_interval_secs: u64,
-    auto_ingest: bool,
+    _auto_ingest: bool,
 ) {
     let interval = poll_interval_secs.max(XECM_POLL_MIN_INTERVAL_SECS);
     let snapshot_path = format!("{}/{}", project_path, XECM_SNAPSHOT_FILE);
@@ -368,26 +385,44 @@ fn start_xecm_poll_watcher(
             loop {
                 std::thread::sleep(std::time::Duration::from_secs(interval));
 
-                let client_exists = state.0.lock().ok().map(|g| g.is_some()).unwrap_or(false);
-                if !client_exists {
-                    eprintln!("[xecm-watcher] client gone, stopping poll loop");
-                    break;
-                }
+                // Obtain state from the app handle (safe in spawned thread because
+                // app is Clone+Send+'static and the state is globally managed).
+                let state = app.state::<XecmState>();
 
-                let current_snapshot = {
-                    let mut guard = state.0.lock().ok();
-                    match guard.as_mut().and_then(|g| g.as_mut()) {
-                        Some(client) => match client.recursive_snapshot().await {
-                            Ok(snap) => Some(snap),
-                            Err(e) => {
-                                eprintln!("[xecm-watcher] snapshot failed: {e}");
-                                None
-                            }
-                        },
-                        None => {
-                            eprintln!("[xecm-watcher] client cleared, stopping");
+                // Take the client out of the mutex so we don't hold MutexGuard
+                // (!Send) across the .await below, then put it back when done.
+                let client_opt: Option<XecmClient> = {
+                    let mut guard = match state.0.lock() {
+                        Ok(g) => g,
+                        Err(_) => {
+                            eprintln!("[xecm-watcher] state poisoned, stopping");
                             break;
                         }
+                    };
+                    guard.take()
+                };
+
+                let current_snapshot = match client_opt {
+                    Some(mut client) => match client.recursive_snapshot().await {
+                        Ok(snap) => {
+                            // Put the client back after successful snapshot
+                            if let Ok(mut guard) = state.0.lock() {
+                                *guard = Some(client);
+                            }
+                            Some(snap)
+                        }
+                        Err(e) => {
+                            eprintln!("[xecm-watcher] snapshot failed: {e}");
+                            // Put the client back even on error
+                            if let Ok(mut guard) = state.0.lock() {
+                                *guard = Some(client);
+                            }
+                            None
+                        }
+                    },
+                    None => {
+                        eprintln!("[xecm-watcher] client cleared, stopping");
+                        break;
                     }
                 };
 
