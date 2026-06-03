@@ -15,6 +15,8 @@ use tauri::{AppHandle, Emitter, State};
 use walkdir::WalkDir;
 
 use crate::panic_guard::run_guarded;
+use crate::xecm_client::XecmClient;
+use crate::XecmState;
 
 const SNAPSHOT_FILE: &str = ".llm-wiki/file-snapshot.json";
 const QUEUE_FILE: &str = ".llm-wiki/file-change-queue.json";
@@ -128,6 +130,8 @@ pub struct SourceWatchConfig {
     exclude_globs: Vec<String>,
     #[serde(default = "default_source_watch_max_file_size_mb")]
     max_file_size_mb: u64,
+    #[serde(default = "default_source_watch_poll_interval")]
+    poll_interval_secs: Option<u64>,
 }
 
 impl Default for SourceWatchConfig {
@@ -167,6 +171,10 @@ fn default_source_watch_exclude_globs() -> Vec<String> {
 
 fn default_source_watch_max_file_size_mb() -> u64 {
     default_source_watch_config().max_file_size_mb
+}
+
+fn default_source_watch_poll_interval() -> Option<u64> {
+    Some(30)
 }
 
 fn normalize_source_watch_config(config: Option<SourceWatchConfig>) -> SourceWatchConfig {
@@ -312,6 +320,180 @@ pub fn start_project_file_watcher(
             changed_tasks,
         })
     })
+}
+
+// ── xECM poll watcher ──
+
+const XECM_POLL_MIN_INTERVAL_SECS: u64 = 10;
+const XECM_SNAPSHOT_FILE: &str = ".llm-wiki/xecm-snapshot.json";
+
+#[derive(Debug, Serialize, Deserialize)]
+struct XecmSnapshot {
+    workspace_node_id: u64,
+    last_poll: String,
+    nodes: std::collections::HashMap<u64, XecmSnapshotEntry>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct XecmSnapshotEntry {
+    name: String,
+    modify_date: Option<String>,
+    size: u64,
+}
+
+fn start_xecm_poll_watcher(
+    app: AppHandle,
+    state: tauri::State<'_, XecmState>,
+    project_id: String,
+    project_path: String,
+    poll_interval_secs: u64,
+    auto_ingest: bool,
+) {
+    let interval = poll_interval_secs.max(XECM_POLL_MIN_INTERVAL_SECS);
+    let snapshot_path = format!("{}/{}", project_path, XECM_SNAPSHOT_FILE);
+
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .expect("xECM poll watcher tokio runtime");
+
+        rt.block_on(async move {
+            let mut last_snapshot: Option<std::collections::HashMap<u64, XecmSnapshotEntry>> =
+                std::fs::read_to_string(&snapshot_path)
+                    .ok()
+                    .and_then(|s| serde_json::from_str::<XecmSnapshot>(&s).ok())
+                    .map(|s| s.nodes);
+
+            loop {
+                std::thread::sleep(std::time::Duration::from_secs(interval));
+
+                let client_exists = state.0.lock().ok().map(|g| g.is_some()).unwrap_or(false);
+                if !client_exists {
+                    eprintln!("[xecm-watcher] client gone, stopping poll loop");
+                    break;
+                }
+
+                let current_snapshot = {
+                    let mut guard = state.0.lock().ok();
+                    match guard.as_mut().and_then(|g| g.as_mut()) {
+                        Some(client) => match client.recursive_snapshot().await {
+                            Ok(snap) => Some(snap),
+                            Err(e) => {
+                                eprintln!("[xecm-watcher] snapshot failed: {e}");
+                                None
+                            }
+                        },
+                        None => {
+                            eprintln!("[xecm-watcher] client cleared, stopping");
+                            break;
+                        }
+                    }
+                };
+
+                if let Some(snapshot) = current_snapshot {
+                    let current_entries: std::collections::HashMap<u64, XecmSnapshotEntry> = snapshot
+                        .into_iter()
+                        .map(|(id, node)| {
+                            (id, XecmSnapshotEntry {
+                                name: node.name.clone(),
+                                modify_date: node.modify_date.clone(),
+                                size: node.size,
+                            })
+                        })
+                        .collect();
+
+                    if let Some(ref prev) = last_snapshot {
+                        let now_ms = chrono::Utc::now().timestamp_millis();
+                        let mut changed_tasks: Vec<FileChangeTask> = Vec::new();
+
+                        for (id, entry) in &current_entries {
+                            match prev.get(id) {
+                                None => {
+                                    changed_tasks.push(FileChangeTask {
+                                        id: uuid::Uuid::new_v4().to_string(),
+                                        project_id: project_id.clone(),
+                                        path: format!("{}/raw/sources/{}", project_path, entry.name),
+                                        kind: FileChangeKind::Created,
+                                        status: FileChangeStatus::Pending,
+                                        hash_before: None,
+                                        hash_after: None,
+                                        size: Some(entry.size),
+                                        mtime_ms: None,
+                                        created_at: now_ms,
+                                        updated_at: now_ms,
+                                        retry_count: 0,
+                                        error: None,
+                                        needs_rerun: false,
+                                    });
+                                }
+                                Some(prev_entry) if prev_entry.modify_date != entry.modify_date => {
+                                    changed_tasks.push(FileChangeTask {
+                                        id: uuid::Uuid::new_v4().to_string(),
+                                        project_id: project_id.clone(),
+                                        path: format!("{}/raw/sources/{}", project_path, entry.name),
+                                        kind: FileChangeKind::Modified,
+                                        status: FileChangeStatus::Pending,
+                                        hash_before: None,
+                                        hash_after: None,
+                                        size: Some(entry.size),
+                                        mtime_ms: None,
+                                        created_at: now_ms,
+                                        updated_at: now_ms,
+                                        retry_count: 0,
+                                        error: None,
+                                        needs_rerun: false,
+                                    });
+                                }
+                                _ => {}
+                            }
+                        }
+
+                        for (id, entry) in prev {
+                            if !current_entries.contains_key(id) {
+                                changed_tasks.push(FileChangeTask {
+                                    id: uuid::Uuid::new_v4().to_string(),
+                                    project_id: project_id.clone(),
+                                    path: format!("{}/raw/sources/{}", project_path, entry.name),
+                                    kind: FileChangeKind::Deleted,
+                                    status: FileChangeStatus::Pending,
+                                    hash_before: None,
+                                    hash_after: None,
+                                    size: Some(entry.size),
+                                    mtime_ms: None,
+                                    created_at: now_ms,
+                                    updated_at: now_ms,
+                                    retry_count: 0,
+                                    error: None,
+                                    needs_rerun: false,
+                                });
+                            }
+                        }
+
+                        if !changed_tasks.is_empty() {
+                            let _ = app.emit(
+                                EVENT_CHANGED,
+                                FileSyncPayload {
+                                    project_id: project_id.clone(),
+                                    tasks: changed_tasks,
+                                },
+                            );
+                        }
+                    }
+
+                    let snap = XecmSnapshot {
+                        workspace_node_id: 0,
+                        last_poll: chrono::Utc::now().to_rfc3339(),
+                        nodes: current_entries.clone(),
+                    };
+                    if let Ok(json) = serde_json::to_string_pretty(&snap) {
+                        let _ = std::fs::write(&snapshot_path, json);
+                    }
+                    last_snapshot = Some(current_entries);
+                }
+            }
+        });
+    });
 }
 
 #[tauri::command]
