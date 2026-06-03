@@ -11,7 +11,7 @@ use std::time::Duration;
 use md5::{Digest, Md5};
 use notify::{Config, Event, RecommendedWatcher, RecursiveMode, Watcher};
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use walkdir::WalkDir;
 
 use crate::panic_guard::run_guarded;
@@ -352,7 +352,7 @@ struct XecmSnapshot {
     nodes: std::collections::HashMap<u64, XecmSnapshotEntry>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct XecmSnapshotEntry {
     name: String,
     modify_date: Option<String>,

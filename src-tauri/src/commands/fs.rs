@@ -5,12 +5,13 @@ use std::thread;
 use std::time::Duration;
 
 use calamine::{open_workbook_auto, Data, Reader};
+use md5::{Digest, Md5};
 use office_oxide::Document;
 
 use crate::commands::file_sync;
 use crate::panic_guard::run_guarded;
 use crate::types::wiki::FileNode;
-use crate::xecm_client::{XecmClient, XecmError};
+use crate::xecm_client::XecmError;
 use crate::XecmState;
 
 /// Known binary formats that need special extraction
@@ -38,15 +39,19 @@ fn xecm_err(e: XecmError) -> String {
 #[tauri::command]
 pub async fn read_file(path: String, extract_images: Option<bool>, state: tauri::State<'_, XecmState>) -> Result<String, String> {
     if is_xecm_source(&state, &path) {
-        let mut guard = state.0.lock().map_err(|e| format!("xECM: {e}"))?;
-        let cl = guard.as_mut().ok_or("xECM: client not configured")?;
-        let node_id = cl.resolve_path(&path).await.map_err(xecm_err)?;
-        let bytes = cl.get_content(node_id).await.map_err(xecm_err)?;
+        let mut client = {
+            let mut guard = state.0.lock().map_err(|e| format!("xECM: {e}"))?;
+            guard.take().ok_or("xECM: client not configured")?
+        };
+        let node_id = client.resolve_path(&path).await.map_err(xecm_err)?;
+        let bytes = client.get_content(node_id).await.map_err(xecm_err)?;
+        // Put client back
+        if let Ok(mut guard) = state.0.lock() { let _ = guard.insert(client); }
         let text = String::from_utf8_lossy(&bytes).to_string();
         let p = std::path::Path::new(&path);
         let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
         if ext == "pdf" || OFFICE_EXTS.contains(&ext.as_str()) {
-            let cache_key = format!("{:x}", md5::compute(path.as_bytes()));
+            let cache_key = format!("{:x}", Md5::digest(path.as_bytes()));
             let cache_path = std::env::temp_dir().join(format!("xecm-{cache_key}.{ext}"));
             std::fs::write(&cache_path, &bytes).map_err(|e| format!("xECM: {e}"))?;
             let result = if ext == "pdf" {
@@ -128,14 +133,18 @@ pub async fn read_file(path: String, extract_images: Option<bool>, state: tauri:
 #[tauri::command]
 pub async fn preprocess_file(path: String, state: tauri::State<'_, XecmState>) -> Result<String, String> {
     if is_xecm_source(&state, &path) {
-        let mut guard = state.0.lock().map_err(|e| format!("xECM: {e}"))?;
-        let cl = guard.as_mut().ok_or("xECM: client not configured")?;
-        let node_id = cl.resolve_path(&path).await.map_err(xecm_err)?;
-        let bytes = cl.get_content(node_id).await.map_err(xecm_err)?;
+        let mut client = {
+            let mut guard = state.0.lock().map_err(|e| format!("xECM: {e}"))?;
+            guard.take().ok_or("xECM: client not configured")?
+        };
+        let node_id = client.resolve_path(&path).await.map_err(xecm_err)?;
+        let bytes = client.get_content(node_id).await.map_err(xecm_err)?;
+        // Put client back
+        if let Ok(mut guard) = state.0.lock() { let _ = guard.insert(client); }
         let p = std::path::Path::new(&path);
         let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
         if ext == "pdf" || OFFICE_EXTS.contains(&ext.as_str()) {
-            let cache_key = format!("{:x}", md5::compute(path.as_bytes()));
+            let cache_key = format!("{:x}", Md5::digest(path.as_bytes()));
             let cache_path = std::env::temp_dir().join(format!("xecm-pp-{cache_key}.{ext}"));
             std::fs::write(&cache_path, &bytes).map_err(|e| format!("xECM: {e}"))?;
             let result = if ext == "pdf" {
@@ -1064,10 +1073,14 @@ pub async fn write_file_atomic(path: String, contents: String) -> Result<(), Str
 #[tauri::command]
 pub async fn list_directory(path: String, state: tauri::State<'_, XecmState>) -> Result<Vec<FileNode>, String> {
     if is_xecm_source(&state, &path) {
-        let mut guard = state.0.lock().map_err(|e| format!("xECM: {e}"))?;
-        let cl = guard.as_mut().ok_or("xECM: client not configured")?;
-        let node_id = cl.resolve_path(&path).await.map_err(xecm_err)?;
-        let (nodes, _total) = cl.list_directory(node_id, 1).await.map_err(xecm_err)?;
+        let mut client = {
+            let mut guard = state.0.lock().map_err(|e| format!("xECM: {e}"))?;
+            guard.take().ok_or("xECM: client not configured")?
+        };
+        let node_id = client.resolve_path(&path).await.map_err(xecm_err)?;
+        let (nodes, _total) = client.list_directory(node_id, 1).await.map_err(xecm_err)?;
+        // Put client back
+        if let Ok(mut guard) = state.0.lock() { let _ = guard.insert(client); }
         let mut sorted = nodes;
         sorted.sort_by(|a, b| {
             match (a.container, b.container) {
@@ -1492,13 +1505,17 @@ pub struct FileBase64 {
 #[tauri::command]
 pub async fn read_file_as_base64(path: String, state: tauri::State<'_, XecmState>) -> Result<FileBase64, String> {
     if is_xecm_source(&state, &path) {
-        let mut guard = state.0.lock().map_err(|e| format!("xECM: {e}"))?;
-        let cl = guard.as_mut().ok_or("xECM: client not configured")?;
-        let node_id = cl.resolve_path(&path).await.map_err(xecm_err)?;
-        let bytes = cl.get_content(node_id).await.map_err(xecm_err)?;
+        let mut client = {
+            let mut guard = state.0.lock().map_err(|e| format!("xECM: {e}"))?;
+            guard.take().ok_or("xECM: client not configured")?
+        };
+        let node_id = client.resolve_path(&path).await.map_err(xecm_err)?;
+        let bytes = client.get_content(node_id).await.map_err(xecm_err)?;
+        // Put client back
+        if let Ok(mut guard) = state.0.lock() { let _ = guard.insert(client); }
         let mime = mime_guess::from_path(&path).first_or_octet_stream().to_string();
         return Ok(FileBase64 {
-            base64: base64::encode(&bytes),
+            base64: base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &bytes),
             mime_type: mime,
         });
     }
@@ -1539,13 +1556,18 @@ pub async fn read_file_as_base64(path: String, state: tauri::State<'_, XecmState
 #[tauri::command]
 pub async fn file_exists(path: String, state: tauri::State<'_, XecmState>) -> Result<bool, String> {
     if is_xecm_source(&state, &path) {
-        let mut guard = state.0.lock().map_err(|e| format!("xECM: {e}"))?;
-        let cl = guard.as_mut().ok_or("xECM: client not configured")?;
-        match cl.resolve_path(&path).await {
-            Ok(_) => return Ok(true),
-            Err(XecmError::NotFound(_)) => return Ok(false),
-            Err(e) => return Err(xecm_err(e)),
-        }
+        let mut client = {
+            let mut guard = state.0.lock().map_err(|e| format!("xECM: {e}"))?;
+            guard.take().ok_or("xECM: client not configured")?
+        };
+        let result = match client.resolve_path(&path).await {
+            Ok(_) => Ok(true),
+            Err(XecmError::NotFound(_)) => Ok(false),
+            Err(e) => Err(xecm_err(e)),
+        };
+        // Put client back
+        if let Ok(mut guard) = state.0.lock() { let _ = guard.insert(client); }
+        return result;
     }
 
     // `Path::exists()` does a `stat(2)` syscall — fast on a hot
@@ -1565,10 +1587,14 @@ pub async fn file_exists(path: String, state: tauri::State<'_, XecmState>) -> Re
 #[tauri::command]
 pub async fn get_file_modified_time(path: String, state: tauri::State<'_, XecmState>) -> Result<u64, String> {
     if is_xecm_source(&state, &path) {
-        let mut guard = state.0.lock().map_err(|e| format!("xECM: {e}"))?;
-        let cl = guard.as_mut().ok_or("xECM: client not configured")?;
-        let node_id = cl.resolve_path(&path).await.map_err(xecm_err)?;
-        let node = cl.get_node(node_id).await.map_err(xecm_err)?;
+        let mut client = {
+            let mut guard = state.0.lock().map_err(|e| format!("xECM: {e}"))?;
+            guard.take().ok_or("xECM: client not configured")?
+        };
+        let node_id = client.resolve_path(&path).await.map_err(xecm_err)?;
+        let node = client.get_node(node_id).await.map_err(xecm_err)?;
+        // Put client back
+        if let Ok(mut guard) = state.0.lock() { let _ = guard.insert(client); }
         if let Some(date) = node.modify_date {
             return chrono::NaiveDateTime::parse_from_str(&date, "%Y-%m-%dT%H:%M:%S")
                 .or_else(|_| chrono::NaiveDateTime::parse_from_str(&date, "%Y-%m-%dT%H:%M:%S%.f"))
@@ -1599,10 +1625,14 @@ pub async fn get_file_modified_time(path: String, state: tauri::State<'_, XecmSt
 #[tauri::command]
 pub async fn get_file_size(path: String, state: tauri::State<'_, XecmState>) -> Result<u64, String> {
     if is_xecm_source(&state, &path) {
-        let mut guard = state.0.lock().map_err(|e| format!("xECM: {e}"))?;
-        let cl = guard.as_mut().ok_or("xECM: client not configured")?;
-        let node_id = cl.resolve_path(&path).await.map_err(xecm_err)?;
-        let node = cl.get_node(node_id).await.map_err(xecm_err)?;
+        let mut client = {
+            let mut guard = state.0.lock().map_err(|e| format!("xECM: {e}"))?;
+            guard.take().ok_or("xECM: client not configured")?
+        };
+        let node_id = client.resolve_path(&path).await.map_err(xecm_err)?;
+        let node = client.get_node(node_id).await.map_err(xecm_err)?;
+        // Put client back
+        if let Ok(mut guard) = state.0.lock() { let _ = guard.insert(client); }
         return Ok(node.size);
     }
 
@@ -1621,12 +1651,15 @@ pub async fn get_file_size(path: String, state: tauri::State<'_, XecmState>) -> 
 #[tauri::command]
 pub async fn get_file_md5(path: String, state: tauri::State<'_, XecmState>) -> Result<String, String> {
     if is_xecm_source(&state, &path) {
-        let mut guard = state.0.lock().map_err(|e| format!("xECM: {e}"))?;
-        let cl = guard.as_mut().ok_or("xECM: client not configured")?;
-        let node_id = cl.resolve_path(&path).await.map_err(xecm_err)?;
-        let bytes = cl.get_content(node_id).await.map_err(xecm_err)?;
-        let digest = md5::compute(&bytes);
-        return Ok(format!("{:x}", digest));
+        let mut client = {
+            let mut guard = state.0.lock().map_err(|e| format!("xECM: {e}"))?;
+            guard.take().ok_or("xECM: client not configured")?
+        };
+        let node_id = client.resolve_path(&path).await.map_err(xecm_err)?;
+        let bytes = client.get_content(node_id).await.map_err(xecm_err)?;
+        // Put client back
+        if let Ok(mut guard) = state.0.lock() { let _ = guard.insert(client); }
+        return Ok(format!("{:x}", Md5::digest(&bytes)));
     }
 
     use md5::{Digest, Md5};

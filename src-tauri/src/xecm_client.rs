@@ -328,8 +328,262 @@ fn urlencoding(s: &str) -> String {
 }
 
 fn cache_key_for(node: &XecmNode) -> String {
+    use md5::{Digest, Md5};
     let date = node.modify_date.as_deref().unwrap_or("unknown");
     let hash_input = format!("{}-{}", node.id, date);
-    let digest = md5::compute(hash_input.as_bytes());
+    let digest = Md5::digest(hash_input.as_bytes());
     format!("{:x}", digest)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const TEST_BASE_URL: &str = "http://192.168.0.29/otcs/cs.exe/api/v1";
+    const TEST_USERNAME: &str = "admin";
+    const TEST_PASSWORD: &str = "OpenText1";
+    const TEST_WORKSPACE: &str = "Enterprise";
+
+    fn rt() -> tokio::runtime::Runtime {
+        tokio::runtime::Runtime::new().unwrap()
+    }
+
+    fn test_config() -> XecmConfig {
+        let ticket = rt()
+            .block_on(XecmClient::authenticate(
+                TEST_BASE_URL,
+                TEST_USERNAME,
+                TEST_PASSWORD,
+            ))
+            .expect("authenticate");
+
+        XecmConfig {
+            enabled: true,
+            base_url: TEST_BASE_URL.to_string(),
+            workspace_node_id: 2000,
+            workspace_name: TEST_WORKSPACE.to_string(),
+            username: TEST_USERNAME.to_string(),
+            ticket,
+            poll_interval_secs: 30,
+        }
+    }
+
+    fn test_client() -> XecmClient {
+        let config = test_config();
+        XecmClient::new(config, std::env::temp_dir().join("xecm-test-cache"))
+    }
+
+    #[test]
+    fn authenticate_returns_ticket() {
+        let ticket = rt()
+            .block_on(XecmClient::authenticate(TEST_BASE_URL, TEST_USERNAME, TEST_PASSWORD));
+        assert!(ticket.is_ok(), "auth failed: {:?}", ticket.err());
+        assert!(!ticket.unwrap().is_empty());
+    }
+
+    #[test]
+    fn list_workspaces_finds_enterprise() {
+        let config = test_config();
+        let workspaces = rt()
+            .block_on(XecmClient::list_workspaces(TEST_BASE_URL, &config.ticket))
+            .expect("list workspaces");
+        assert!(!workspaces.is_empty(), "no workspaces returned");
+        let enterprise = workspaces.iter().find(|w| w.name == TEST_WORKSPACE);
+        assert!(enterprise.is_some(), "Enterprise workspace not found");
+        assert_eq!(enterprise.unwrap().id, 2000);
+    }
+
+    #[test]
+    fn get_node_returns_workspace_root() {
+        let client = test_client();
+        let node = rt().block_on(client.get_node(2000)).expect("get_node");
+        assert_eq!(node.id, 2000);
+        assert_eq!(node.name, "Enterprise");
+        assert!(node.container, "workspace root should be a container");
+    }
+
+    #[test]
+    fn list_directory_returns_items() {
+        let client = test_client();
+        let (items, total) = rt()
+            .block_on(client.list_directory(2000, 1))
+            .expect("list_directory");
+        assert!(!items.is_empty(), "workspace should have items");
+        assert!(total >= 1);
+        for item in &items {
+            assert!(!item.name.is_empty(), "every item should have a name");
+            assert!(item.id > 0, "every item should have a valid id");
+        }
+    }
+
+    #[test]
+    fn list_all_children_gets_all_pages() {
+        let client = test_client();
+        let children = rt()
+            .block_on(client.list_all_children(2000))
+            .expect("list_all_children");
+        assert!(!children.is_empty());
+    }
+
+    #[test]
+    fn get_content_downloads_file_bytes() {
+        let client = test_client();
+        let children = rt()
+            .block_on(client.list_all_children(2000))
+            .expect("list_all_children");
+        let file = children
+            .iter()
+            .find(|n| !n.container && n.size > 0)
+            .expect("need at least one non-empty file in workspace");
+        let bytes = rt()
+            .block_on(client.get_content(file.id))
+            .expect("get_content");
+        assert!(!bytes.is_empty());
+        assert_eq!(bytes.len() as u64, file.size);
+    }
+
+    #[test]
+    fn resolve_path_finds_root() {
+        let mut client = test_client();
+        let id = rt()
+            .block_on(client.resolve_path("raw/sources"))
+            .expect("resolve_path");
+        assert_eq!(id, 2000);
+    }
+
+    #[test]
+    fn resolve_path_caches_repeated_lookups() {
+        let mut client = test_client();
+        let id1 = rt()
+            .block_on(client.resolve_path("raw/sources"))
+            .expect("resolve_path");
+        let id2 = rt()
+            .block_on(client.resolve_path("raw/sources"))
+            .expect("resolve_path");
+        assert_eq!(id1, id2);
+        assert!(client.path_cache.contains_key("raw/sources"));
+    }
+
+    #[test]
+    fn recursive_snapshot_collects_all_nodes() {
+        let client = test_client();
+        let snapshot = rt()
+            .block_on(client.recursive_snapshot())
+            .expect("recursive_snapshot");
+        eprintln!(
+            "recursive_snapshot collected {} nodes under Enterprise workspace",
+            snapshot.len()
+        );
+        for (id, node) in &snapshot {
+            assert_eq!(*id, node.id);
+            assert!(!node.name.is_empty());
+        }
+    }
+
+    #[test]
+    fn urlencoding_handles_special_characters() {
+        assert_eq!(urlencoding("admin"), "admin");
+        assert_eq!(urlencoding("user@name"), "user%40name");
+        assert_eq!(urlencoding("a b"), "a%20b");
+        assert_eq!(urlencoding("a+b"), "a%2Bb");
+    }
+
+    #[test]
+    fn cache_key_is_deterministic() {
+        let node = XecmNode {
+            id: 123,
+            name: "test.pdf".into(),
+            type_: 144,
+            container: false,
+            size: 100,
+            modify_date: Some("2026-01-01T00:00:00".into()),
+            mime_type: None,
+            parent_id: 0,
+        };
+        let k1 = cache_key_for(&node);
+        let k2 = cache_key_for(&node);
+        assert_eq!(k1, k2);
+        assert_eq!(k1.len(), 32);
+    }
+
+    #[test]
+    fn cache_key_differs_on_modify_date_change() {
+        let mut node = XecmNode {
+            id: 123,
+            name: "test.pdf".into(),
+            type_: 144,
+            container: false,
+            size: 100,
+            modify_date: Some("2026-01-01T00:00:00".into()),
+            mime_type: None,
+            parent_id: 0,
+        };
+        let k1 = cache_key_for(&node);
+        node.modify_date = Some("2026-06-01T00:00:00".into());
+        let k2 = cache_key_for(&node);
+        assert_ne!(k1, k2);
+    }
+
+    #[test]
+    fn is_source_path_recognizes_valid_paths() {
+        let config = test_config();
+        let client = XecmClient::new(config, std::env::temp_dir().join("xecm-test-cache"));
+        assert!(client.is_source_path("raw/sources"));
+        assert!(client.is_source_path("raw/sources/doc.pdf"));
+        assert!(client.is_source_path("raw/sources/folder/file.txt"));
+        assert!(client.is_source_path("raw\\sources\\doc.pdf"));
+        assert!(!client.is_source_path("wiki/index.md"));
+        assert!(!client.is_source_path("purpose.md"));
+        assert!(!client.is_source_path(""));
+    }
+
+    #[test]
+    fn xecm_error_display_messages() {
+        assert!(format!("{}", XecmError::Auth("bad".into())).contains("auth"));
+        assert!(format!("{}", XecmError::Network("timeout".into())).contains("network"));
+        assert!(format!("{}", XecmError::NotFound("missing".into())).contains("not found"));
+        assert!(format!("{}", XecmError::RateLimited).contains("rate limited"));
+        assert!(format!("{}", XecmError::Other("oops".into())).contains("oops"));
+    }
+
+    #[test]
+    fn xecm_config_serde_roundtrips() {
+        let config = XecmConfig {
+            enabled: true,
+            base_url: "http://example.com/api/v1".into(),
+            workspace_node_id: 42,
+            workspace_name: "TestWS".into(),
+            username: "user1".into(),
+            ticket: "ticket123".into(),
+            poll_interval_secs: 60,
+        };
+        let json = serde_json::to_string(&config).unwrap();
+        let parsed: XecmConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.enabled, config.enabled);
+        assert_eq!(parsed.base_url, config.base_url);
+        assert_eq!(parsed.workspace_node_id, config.workspace_node_id);
+        assert_eq!(parsed.workspace_name, config.workspace_name);
+        assert_eq!(parsed.ticket, config.ticket);
+        assert_eq!(parsed.poll_interval_secs, config.poll_interval_secs);
+    }
+
+    #[test]
+    fn xecm_config_camelcase_json() {
+        let json = r#"{
+            "enabled": true,
+            "baseUrl": "http://example.com/api/v1",
+            "workspaceNodeId": 42,
+            "workspaceName": "TestWS",
+            "username": "user1",
+            "ticket": "ticket123",
+            "pollIntervalSecs": 60
+        }"#;
+        let config: XecmConfig = serde_json::from_str(json).unwrap();
+        assert!(config.enabled);
+        assert_eq!(config.base_url, "http://example.com/api/v1");
+        assert_eq!(config.workspace_node_id, 42);
+        assert_eq!(config.workspace_name, "TestWS");
+        assert_eq!(config.poll_interval_secs, 60);
+    }
+
 }

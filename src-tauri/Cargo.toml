@@ -60,6 +60,7 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 base64 = "0.22"
 sha2 = "0.10"
 md-5 = "0.10"
+mime_guess = "2"
 notify = "8"
 walkdir = "2"
 
