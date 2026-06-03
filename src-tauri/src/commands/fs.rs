@@ -10,6 +10,8 @@ use office_oxide::Document;
 use crate::commands::file_sync;
 use crate::panic_guard::run_guarded;
 use crate::types::wiki::FileNode;
+use crate::xecm_client::{XecmClient, XecmError};
+use crate::XecmState;
 
 /// Known binary formats that need special extraction
 const OFFICE_EXTS: &[&str] = &["doc", "docx", "pptx", "xls", "xlsx", "odt", "ods", "odp"];
@@ -22,8 +24,44 @@ const MEDIA_EXTS: &[&str] = &[
 ];
 const LEGACY_DOC_EXTS: &[&str] = &["ppt", "pages", "numbers", "key", "epub"];
 
+/// Check if an xECM client is active and the path is under raw/sources/.
+fn is_xecm_source(state: &tauri::State<'_, XecmState>, path: &str) -> bool {
+    state.0.lock().ok().map(|g| {
+        g.as_ref().map(|c| c.is_source_path(path)).unwrap_or(false)
+    }).unwrap_or(false)
+}
+
+fn xecm_err(e: XecmError) -> String {
+    format!("xECM: {e}")
+}
+
 #[tauri::command]
-pub async fn read_file(path: String, extract_images: Option<bool>) -> Result<String, String> {
+pub async fn read_file(path: String, extract_images: Option<bool>, state: tauri::State<'_, XecmState>) -> Result<String, String> {
+    if is_xecm_source(&state, &path) {
+        let mut guard = state.0.lock().map_err(|e| format!("xECM: {e}"))?;
+        let cl = guard.as_mut().ok_or("xECM: client not configured")?;
+        let node_id = cl.resolve_path(&path).await.map_err(xecm_err)?;
+        let bytes = cl.get_content(node_id).await.map_err(xecm_err)?;
+        let text = String::from_utf8_lossy(&bytes).to_string();
+        let p = std::path::Path::new(&path);
+        let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+        if ext == "pdf" || OFFICE_EXTS.contains(&ext.as_str()) {
+            let cache_key = format!("{:x}", md5::compute(path.as_bytes()));
+            let cache_path = std::env::temp_dir().join(format!("xecm-{cache_key}.{ext}"));
+            std::fs::write(&cache_path, &bytes).map_err(|e| format!("xECM: {e}"))?;
+            let result = if ext == "pdf" {
+                extract_pdf_text(&cache_path.to_string_lossy(), extract_images.unwrap_or(true))
+                    .map_err(|e| format!("xECM: {e}"))?
+            } else {
+                extract_office_text(&cache_path.to_string_lossy(), &ext)
+                    .map_err(|e| format!("xECM: {e}"))?
+            };
+            let _ = std::fs::remove_file(&cache_path);
+            return Ok(result);
+        }
+        return Ok(text);
+    }
+
     // `spawn_blocking` is REQUIRED, not a perf nicety. The body does
     // synchronous PDF/Office text extraction (pdfium FFI, calamine,
     // zip + image decode) that can take 10s+ on big files. Running
@@ -88,7 +126,29 @@ pub async fn read_file(path: String, extract_images: Option<bool>) -> Result<Str
 
 /// Pre-process a file and cache the extracted text.
 #[tauri::command]
-pub async fn preprocess_file(path: String) -> Result<String, String> {
+pub async fn preprocess_file(path: String, state: tauri::State<'_, XecmState>) -> Result<String, String> {
+    if is_xecm_source(&state, &path) {
+        let mut guard = state.0.lock().map_err(|e| format!("xECM: {e}"))?;
+        let cl = guard.as_mut().ok_or("xECM: client not configured")?;
+        let node_id = cl.resolve_path(&path).await.map_err(xecm_err)?;
+        let bytes = cl.get_content(node_id).await.map_err(xecm_err)?;
+        let p = std::path::Path::new(&path);
+        let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+        if ext == "pdf" || OFFICE_EXTS.contains(&ext.as_str()) {
+            let cache_key = format!("{:x}", md5::compute(path.as_bytes()));
+            let cache_path = std::env::temp_dir().join(format!("xecm-pp-{cache_key}.{ext}"));
+            std::fs::write(&cache_path, &bytes).map_err(|e| format!("xECM: {e}"))?;
+            let result = if ext == "pdf" {
+                extract_pdf_text(&cache_path.to_string_lossy(), false)
+            } else {
+                extract_office_text(&cache_path.to_string_lossy(), &ext)
+            };
+            let _ = std::fs::remove_file(&cache_path);
+            return result.map_err(|e| format!("xECM: {e}"));
+        }
+        return Ok("no preprocessing needed".to_string());
+    }
+
     // See `read_file` above for why `spawn_blocking` is required.
     tauri::async_runtime::spawn_blocking(move || {
         run_guarded("preprocess_file", || {
@@ -1002,7 +1062,33 @@ pub async fn write_file_atomic(path: String, contents: String) -> Result<(), Str
 }
 
 #[tauri::command]
-pub async fn list_directory(path: String) -> Result<Vec<FileNode>, String> {
+pub async fn list_directory(path: String, state: tauri::State<'_, XecmState>) -> Result<Vec<FileNode>, String> {
+    if is_xecm_source(&state, &path) {
+        let mut guard = state.0.lock().map_err(|e| format!("xECM: {e}"))?;
+        let cl = guard.as_mut().ok_or("xECM: client not configured")?;
+        let node_id = cl.resolve_path(&path).await.map_err(xecm_err)?;
+        let (nodes, _total) = cl.list_directory(node_id, 1).await.map_err(xecm_err)?;
+        let mut sorted = nodes;
+        sorted.sort_by(|a, b| {
+            match (a.container, b.container) {
+                (true, false) => std::cmp::Ordering::Less,
+                (false, true) => std::cmp::Ordering::Greater,
+                _ => a.name.cmp(&b.name),
+            }
+        });
+        let norm = path.replace('\\', "/");
+        let base = if norm.ends_with('/') { norm.clone() } else { format!("{norm}/") };
+        let file_nodes: Vec<FileNode> = sorted.into_iter().map(|n| {
+            FileNode {
+                name: n.name.clone(),
+                path: format!("{base}{}", n.name),
+                is_dir: n.container,
+                children: if n.container { Some(Vec::new()) } else { None },
+            }
+        }).collect();
+        return Ok(file_nodes);
+    }
+
     tauri::async_runtime::spawn_blocking(move || {
         run_guarded("list_directory", || {
             let p = Path::new(&path);
@@ -1161,7 +1247,11 @@ pub async fn copy_directory(source: String, destination: String) -> Result<Vec<S
 }
 
 #[tauri::command]
-pub async fn delete_file(path: String) -> Result<(), String> {
+pub async fn delete_file(path: String, state: tauri::State<'_, XecmState>) -> Result<(), String> {
+    if is_xecm_source(&state, &path) {
+        return Err("xECM: Cannot delete xECM files from LLM Wiki. Manage files in xECM directly.".to_string());
+    }
+
     tauri::async_runtime::spawn_blocking(move || {
         run_guarded("delete_file", || {
             let p = Path::new(&path);
@@ -1220,7 +1310,14 @@ fn is_windows_transient_delete_error(err: &std::io::Error) -> bool {
 pub async fn find_related_wiki_pages(
     project_path: String,
     source_name: String,
+    state: tauri::State<'_, XecmState>,
 ) -> Result<Vec<String>, String> {
+    // xECM sources use the same naming conventions in wiki frontmatter.
+    // The existing logic scans local wiki/ files, which works unchanged.
+    if is_xecm_source(&state, &source_name) {
+        // Fall through to local logic
+    }
+
     tauri::async_runtime::spawn_blocking(move || {
         run_guarded("find_related_wiki_pages", || {
             let wiki_dir = Path::new(&project_path).join("wiki");
@@ -1393,7 +1490,19 @@ pub struct FileBase64 {
 }
 
 #[tauri::command]
-pub async fn read_file_as_base64(path: String) -> Result<FileBase64, String> {
+pub async fn read_file_as_base64(path: String, state: tauri::State<'_, XecmState>) -> Result<FileBase64, String> {
+    if is_xecm_source(&state, &path) {
+        let mut guard = state.0.lock().map_err(|e| format!("xECM: {e}"))?;
+        let cl = guard.as_mut().ok_or("xECM: client not configured")?;
+        let node_id = cl.resolve_path(&path).await.map_err(xecm_err)?;
+        let bytes = cl.get_content(node_id).await.map_err(xecm_err)?;
+        let mime = mime_guess::from_path(&path).first_or_octet_stream().to_string();
+        return Ok(FileBase64 {
+            base64: base64::encode(&bytes),
+            mime_type: mime,
+        });
+    }
+
     use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
     tauri::async_runtime::spawn_blocking(move || {
         run_guarded("read_file_as_base64", || {
@@ -1428,7 +1537,17 @@ pub async fn read_file_as_base64(path: String) -> Result<FileBase64, String> {
 /// Cheap existence check without reading or classifying the file.
 /// Returns true iff `path` refers to something on disk right now.
 #[tauri::command]
-pub async fn file_exists(path: String) -> Result<bool, String> {
+pub async fn file_exists(path: String, state: tauri::State<'_, XecmState>) -> Result<bool, String> {
+    if is_xecm_source(&state, &path) {
+        let mut guard = state.0.lock().map_err(|e| format!("xECM: {e}"))?;
+        let cl = guard.as_mut().ok_or("xECM: client not configured")?;
+        match cl.resolve_path(&path).await {
+            Ok(_) => return Ok(true),
+            Err(XecmError::NotFound(_)) => return Ok(false),
+            Err(e) => return Err(xecm_err(e)),
+        }
+    }
+
     // `Path::exists()` does a `stat(2)` syscall — fast on a hot
     // cache, but a blocking syscall nonetheless. Wrapping it keeps
     // the rule "no sync IO on tokio worker threads" uniform across
@@ -1444,7 +1563,22 @@ pub async fn file_exists(path: String) -> Result<bool, String> {
 /// Get the last modified timestamp of a file in milliseconds since Unix epoch.
 /// Returns 0 if the file doesn't exist or metadata can't be read.
 #[tauri::command]
-pub async fn get_file_modified_time(path: String) -> Result<u64, String> {
+pub async fn get_file_modified_time(path: String, state: tauri::State<'_, XecmState>) -> Result<u64, String> {
+    if is_xecm_source(&state, &path) {
+        let mut guard = state.0.lock().map_err(|e| format!("xECM: {e}"))?;
+        let cl = guard.as_mut().ok_or("xECM: client not configured")?;
+        let node_id = cl.resolve_path(&path).await.map_err(xecm_err)?;
+        let node = cl.get_node(node_id).await.map_err(xecm_err)?;
+        if let Some(date) = node.modify_date {
+            return chrono::NaiveDateTime::parse_from_str(&date, "%Y-%m-%dT%H:%M:%S")
+                .or_else(|_| chrono::NaiveDateTime::parse_from_str(&date, "%Y-%m-%dT%H:%M:%S%.f"))
+                .ok()
+                .and_then(|dt| dt.and_utc().timestamp_millis().try_into().ok())
+                .ok_or_else(|| format!("xECM: could not parse modify_date: {date}"))
+        }
+        return Ok(0);
+    }
+
     tauri::async_runtime::spawn_blocking(move || {
         run_guarded("get_file_modified_time", || {
             let metadata = fs::metadata(&path)
@@ -1463,7 +1597,15 @@ pub async fn get_file_modified_time(path: String) -> Result<u64, String> {
 }
 
 #[tauri::command]
-pub async fn get_file_size(path: String) -> Result<u64, String> {
+pub async fn get_file_size(path: String, state: tauri::State<'_, XecmState>) -> Result<u64, String> {
+    if is_xecm_source(&state, &path) {
+        let mut guard = state.0.lock().map_err(|e| format!("xECM: {e}"))?;
+        let cl = guard.as_mut().ok_or("xECM: client not configured")?;
+        let node_id = cl.resolve_path(&path).await.map_err(xecm_err)?;
+        let node = cl.get_node(node_id).await.map_err(xecm_err)?;
+        return Ok(node.size);
+    }
+
     tauri::async_runtime::spawn_blocking(move || {
         run_guarded("get_file_size", || {
             let metadata = fs::metadata(&path)
@@ -1477,7 +1619,16 @@ pub async fn get_file_size(path: String) -> Result<u64, String> {
 
 /// Compute MD5 hash of a file. Returns the hex-encoded hash string.
 #[tauri::command]
-pub async fn get_file_md5(path: String) -> Result<String, String> {
+pub async fn get_file_md5(path: String, state: tauri::State<'_, XecmState>) -> Result<String, String> {
+    if is_xecm_source(&state, &path) {
+        let mut guard = state.0.lock().map_err(|e| format!("xECM: {e}"))?;
+        let cl = guard.as_mut().ok_or("xECM: client not configured")?;
+        let node_id = cl.resolve_path(&path).await.map_err(xecm_err)?;
+        let bytes = cl.get_content(node_id).await.map_err(xecm_err)?;
+        let digest = md5::compute(&bytes);
+        return Ok(format!("{:x}", digest));
+    }
+
     use md5::{Digest, Md5};
     tauri::async_runtime::spawn_blocking(move || {
         run_guarded("get_file_md5", || {
@@ -1506,6 +1657,18 @@ pub async fn get_file_md5(path: String) -> Result<String, String> {
 mod tests {
     use super::*;
     use std::io::Write;
+
+    /// Create a mock xECM state with no client, so tests that call
+    /// `read_file` (now requiring a `state` parameter) fall through to
+    /// the local filesystem path.  `tauri::State<T>` is `#[repr(transparent)]`
+    /// over `&T`, so transmuting a `&'static XecmState` is sound.
+    fn mock_xecm_state() -> tauri::State<'static, XecmState> {
+        static STATE: XecmState = XecmState(std::sync::Mutex::new(None));
+        // Safety: tauri::State<T> is #[repr(transparent)] over &T.
+        // The static STATE lives for 'static, so the reference is valid
+        // for the lifetime of the returned State.
+        unsafe { std::mem::transmute::<&'static XecmState, tauri::State<'static, XecmState>>(&STATE) }
+    }
 
     /// Write `bytes` to a fresh tmp path with `.pdf` suffix and return
     /// the path (the OS tmpdir is NOT cleaned up — acceptable for tests).
@@ -1552,7 +1715,7 @@ mod tests {
 
         for (name, bytes) in payloads {
             let path = tmp_pdf_with_bytes(bytes);
-            let result = read_file(path.clone(), None).await;
+            let result = read_file(path.clone(), None, mock_xecm_state()).await;
             let _ = fs::remove_file(&path);
             eprintln!(
                 "[{name}] => {:?}",
@@ -1570,6 +1733,7 @@ mod tests {
         let result = read_file(
             "/nonexistent/path/that/does/not/exist.pdf".to_string(),
             None,
+            mock_xecm_state(),
         )
         .await;
         assert!(result.is_err() || result.is_ok()); // must at least return
