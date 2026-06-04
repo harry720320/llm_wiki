@@ -191,7 +191,14 @@ impl XecmClient {
     pub async fn get_node(&self, node_id: u64) -> Result<XecmNode, XecmError> {
         let mut retried = false;
         loop {
-            let ticket = self.ticket()?;
+            let ticket = match self.ticket() {
+                Ok(t) => t,
+                Err(_) => {
+                    self.re_authenticate().await?;
+                    retried = true;
+                    continue;
+                }
+            };
             let resp = self
                 .http
                 .get(format!("{}/nodes/{node_id}", self.config.base_url))
@@ -216,7 +223,14 @@ impl XecmClient {
     ) -> Result<(Vec<XecmNode>, u32), XecmError> {
         let mut retried = false;
         loop {
-            let ticket = self.ticket()?;
+            let ticket = match self.ticket() {
+                Ok(t) => t,
+                Err(_) => {
+                    self.re_authenticate().await?;
+                    retried = true;
+                    continue;
+                }
+            };
             let resp = self
                 .http
                 .get(format!(
@@ -264,7 +278,14 @@ impl XecmClient {
 
         let mut retried = false;
         loop {
-            let ticket = self.ticket()?;
+            let ticket = match self.ticket() {
+                Ok(t) => t,
+                Err(_) => {
+                    self.re_authenticate().await?;
+                    retried = true;
+                    continue;
+                }
+            };
             let resp = self
                 .http
                 .get(format!("{base_url}/nodes/{node_id}/content", base_url = self.config.base_url))
