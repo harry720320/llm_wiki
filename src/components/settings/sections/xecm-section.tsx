@@ -27,16 +27,24 @@ export function XecmSection({ draft, setDraft }: Props) {
   const [connected, setConnected] = useState(false)
   const [disconnecting, setDisconnecting] = useState(false)
 
+  // Rehydrate connected state from persisted config on mount
+  const [didRehydrate, setDidRehydrate] = useState(false)
+  if (!didRehydrate && draft.xecmEnabled && draft.xecmBaseUrl && draft.xecmWorkspaceName) {
+    setDidRehydrate(true)
+    setConnected(true)
+  }
+
   async function handleConnect() {
     setConnecting(true)
     setConnectError(null)
     try {
-      const result = await invoke<XecmWorkspace[]>("xecm_connect", {
+      const result = await invoke<{ ticket: string; workspaces: XecmWorkspace[] }>("xecm_connect", {
         baseUrl: draft.xecmBaseUrl,
         username: draft.xecmUsername,
         password,
       })
-      setWorkspaces(result)
+      setWorkspaces(result.workspaces)
+      setDraft("xecmTicket", result.ticket)
       setConnected(true)
       setConnectError(null)
     } catch (err) {
@@ -60,6 +68,7 @@ export function XecmSection({ draft, setDraft }: Props) {
     setDraft("xecmWorkspaceName", "")
     setDraft("xecmWorkspaceNodeId", 0)
     setDraft("xecmUsername", "")
+    setDraft("xecmTicket", "")
     setConnected(false)
     setWorkspaces([])
     setPassword("")

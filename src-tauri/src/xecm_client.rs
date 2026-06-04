@@ -46,8 +46,9 @@ pub struct XecmConfig {
     pub workspace_node_id: u64,
     pub workspace_name: String,
     pub username: String,
-    pub ticket: String,
-    pub poll_interval_secs: u64,
+    #[serde(default)]
+    pub ticket: Option<String>,
+    pub poll_interval_seconds: u64,
 }
 
 #[derive(Debug)]
@@ -103,6 +104,11 @@ impl XecmClient {
         }
     }
 
+    fn ticket(&self) -> Result<&str, XecmError> {
+        self.config.ticket.as_deref()
+            .ok_or_else(|| XecmError::Auth("no ticket configured".to_string()))
+    }
+
     pub async fn authenticate(
         base_url: &str,
         username: &str,
@@ -147,7 +153,7 @@ impl XecmClient {
     }
 
     pub async fn resolve_workspace(&self) -> Result<XecmNode, XecmError> {
-        let workspaces = Self::list_workspaces(&self.config.base_url, &self.config.ticket).await?;
+        let workspaces = Self::list_workspaces(&self.config.base_url, self.ticket()?).await?;
         workspaces
             .into_iter()
             .find(|w| w.name == self.config.workspace_name)
@@ -163,7 +169,7 @@ impl XecmClient {
         let resp = self
             .http
             .get(format!("{}/nodes/{node_id}", self.config.base_url))
-            .header("OTCSTicket", &self.config.ticket)
+            .header("OTCSTicket", self.ticket()?)
             .send()
             .await?;
         Self::check_status(&resp)?;
@@ -182,7 +188,7 @@ impl XecmClient {
                 "{}/nodes/{node_id}/nodes?limit=100&page={page}",
                 self.config.base_url
             ))
-            .header("OTCSTicket", &self.config.ticket)
+            .header("OTCSTicket", self.ticket()?)
             .send()
             .await?;
         Self::check_status(&resp)?;
@@ -218,7 +224,7 @@ impl XecmClient {
         let resp = self
             .http
             .get(format!("{base_url}/nodes/{node_id}/content", base_url = self.config.base_url))
-            .header("OTCSTicket", &self.config.ticket)
+            .header("OTCSTicket", self.ticket()?)
             .send()
             .await?;
         Self::check_status(&resp)?;
@@ -237,15 +243,14 @@ impl XecmClient {
 
         let normalized = path.replace('\\', "/");
         let prefix = "raw/sources";
-        let relative = if normalized == prefix {
-            ""
-        } else if let Some(rest) = normalized.strip_prefix(&format!("{prefix}/")) {
-            rest
-        } else {
-            return Err(XecmError::Other(format!(
-                "path '{}' is not under raw/sources/",
-                path
-            )));
+        let relative = match extract_relative(&normalized, prefix) {
+            Some(r) => r,
+            None => {
+                return Err(XecmError::Other(format!(
+                    "path '{}' is not under raw/sources/",
+                    path
+                )));
+            }
         };
 
         let mut current_id = self.config.workspace_node_id;
@@ -307,9 +312,24 @@ impl XecmClient {
 
     pub fn is_source_path(&self, path: &str) -> bool {
         let normalized = path.replace('\\', "/");
-        let pp = "raw/sources";
-        normalized == pp || normalized.starts_with(&format!("{pp}/"))
+        extract_relative(&normalized, "raw/sources").is_some()
     }
+}
+
+fn extract_relative<'a>(normalized: &'a str, prefix: &str) -> Option<&'a str> {
+    if normalized == prefix {
+        return Some("");
+    }
+    if let Some(rest) = normalized.strip_prefix(&format!("{prefix}/")) {
+        return Some(rest);
+    }
+    if let Some(idx) = normalized.find(&format!("/{prefix}/")) {
+        return Some(&normalized[idx + prefix.len() + 2..]);
+    }
+    if normalized.ends_with(&format!("/{prefix}")) {
+        return Some("");
+    }
+    None
 }
 
 fn urlencoding(s: &str) -> String {
@@ -363,8 +383,8 @@ mod tests {
             workspace_node_id: 2000,
             workspace_name: TEST_WORKSPACE.to_string(),
             username: TEST_USERNAME.to_string(),
-            ticket,
-            poll_interval_secs: 30,
+            ticket: Some(ticket),
+            poll_interval_seconds: 30,
         }
     }
 
@@ -385,7 +405,7 @@ mod tests {
     fn list_workspaces_finds_enterprise() {
         let config = test_config();
         let workspaces = rt()
-            .block_on(XecmClient::list_workspaces(TEST_BASE_URL, &config.ticket))
+            .block_on(XecmClient::list_workspaces(TEST_BASE_URL, config.ticket.as_deref().unwrap()))
             .expect("list workspaces");
         assert!(!workspaces.is_empty(), "no workspaces returned");
         let enterprise = workspaces.iter().find(|w| w.name == TEST_WORKSPACE);
@@ -532,6 +552,10 @@ mod tests {
         assert!(client.is_source_path("raw/sources/doc.pdf"));
         assert!(client.is_source_path("raw/sources/folder/file.txt"));
         assert!(client.is_source_path("raw\\sources\\doc.pdf"));
+        // Absolute paths (what the frontend actually sends)
+        assert!(client.is_source_path("C:/Users/test/project/raw/sources"));
+        assert!(client.is_source_path("C:/Users/test/project/raw/sources/doc.pdf"));
+        assert!(client.is_source_path("C:/Users/test/project/raw/sources/folder/file.txt"));
         assert!(!client.is_source_path("wiki/index.md"));
         assert!(!client.is_source_path("purpose.md"));
         assert!(!client.is_source_path(""));
@@ -554,8 +578,8 @@ mod tests {
             workspace_node_id: 42,
             workspace_name: "TestWS".into(),
             username: "user1".into(),
-            ticket: "ticket123".into(),
-            poll_interval_secs: 60,
+            ticket: Some("ticket123".into()),
+            poll_interval_seconds: 60,
         };
         let json = serde_json::to_string(&config).unwrap();
         let parsed: XecmConfig = serde_json::from_str(&json).unwrap();
@@ -564,7 +588,8 @@ mod tests {
         assert_eq!(parsed.workspace_node_id, config.workspace_node_id);
         assert_eq!(parsed.workspace_name, config.workspace_name);
         assert_eq!(parsed.ticket, config.ticket);
-        assert_eq!(parsed.poll_interval_secs, config.poll_interval_secs);
+        assert_eq!(parsed.poll_interval_seconds, config.poll_interval_seconds);
+
     }
 
     #[test]
@@ -583,7 +608,7 @@ mod tests {
         assert_eq!(config.base_url, "http://example.com/api/v1");
         assert_eq!(config.workspace_node_id, 42);
         assert_eq!(config.workspace_name, "TestWS");
-        assert_eq!(config.poll_interval_secs, 60);
+        assert_eq!(config.poll_interval_seconds, 60);
     }
 
 }

@@ -98,6 +98,7 @@ function initialDraft(
   sourceWatch: ReturnType<typeof useWikiStore.getState>["sourceWatchConfig"],
   apiConfig: ReturnType<typeof useWikiStore.getState>["apiConfig"],
   generalConfig: ReturnType<typeof useWikiStore.getState>["generalConfig"],
+  xecmConfig: ReturnType<typeof useWikiStore.getState>["xecmConfig"],
   maxHistoryMessages: number,
   uiLanguage: string,
   projectPath?: string,
@@ -160,12 +161,13 @@ function initialDraft(
     closeBehavior: generalConfig.closeBehavior,
     uiLanguage,
     theme: theme ?? "system",
-    xecmEnabled: false,
-    xecmBaseUrl: "",
-    xecmWorkspaceName: "",
-    xecmWorkspaceNodeId: 0,
-    xecmUsername: "",
-    xecmPollIntervalSeconds: 30,
+    xecmEnabled: xecmConfig.enabled,
+    xecmBaseUrl: xecmConfig.baseUrl,
+    xecmWorkspaceName: xecmConfig.workspaceName,
+    xecmWorkspaceNodeId: xecmConfig.workspaceNodeId,
+    xecmUsername: xecmConfig.username,
+    xecmPollIntervalSeconds: xecmConfig.pollIntervalSeconds,
+    xecmTicket: xecmConfig.ticket ?? "",
   }
 }
 
@@ -190,6 +192,7 @@ export function SettingsView() {
   const setApiConfig = useWikiStore((s) => s.setApiConfig)
   const generalConfig = useWikiStore((s) => s.generalConfig)
   const setGeneralConfig = useWikiStore((s) => s.setGeneralConfig)
+  const xecmConfig = useWikiStore((s) => s.xecmConfig)
   const maxHistoryMessages = useChatStore((s) => s.maxHistoryMessages)
   const setMaxHistoryMessages = useChatStore((s) => s.setMaxHistoryMessages)
   // Drives the red dot next to the "About" row in the settings
@@ -216,6 +219,7 @@ export function SettingsView() {
       sourceWatchConfig,
       apiConfig,
       generalConfig,
+      xecmConfig,
       maxHistoryMessages,
       i18n.language,
       project?.path,
@@ -270,6 +274,7 @@ export function SettingsView() {
         sourceWatchConfig,
         apiConfig,
         generalConfig,
+        xecmConfig,
         maxHistoryMessages,
         prev.uiLanguage,
         project?.path,
@@ -286,6 +291,7 @@ export function SettingsView() {
     sourceWatchConfig,
     apiConfig,
     generalConfig,
+    xecmConfig,
     maxHistoryMessages,
     project,
   ])
@@ -435,7 +441,7 @@ export function SettingsView() {
       workspaceName: draft.xecmWorkspaceName,
       workspaceNodeId: draft.xecmWorkspaceNodeId,
       username: draft.xecmUsername,
-      ticket: null as string | null,
+      ticket: draft.xecmTicket || null,
       pollIntervalSeconds: Math.max(10, Math.min(300, draft.xecmPollIntervalSeconds || 30)),
     }
     useWikiStore.getState().setXecmConfig(newXecm)

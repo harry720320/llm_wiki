@@ -86,18 +86,28 @@ fn set_xecm_config(
         .lock()
         .map_err(|_| "xECM state is unavailable".to_string())?;
     match config {
-        Some(cfg) if cfg.enabled => {
+        Some(ref cfg) if cfg.enabled => {
+            eprintln!("[xecm] set_xecm_config: enabled=true, url={}, ticket={}",
+                cfg.base_url,
+                cfg.ticket.as_deref().map(|_| "present").unwrap_or("MISSING"));
             *guard = Some(XecmClient::new(
-                cfg,
+                cfg.clone(),
                 std::path::PathBuf::from(".llm-wiki/xecm-cache"),
             ));
             Ok("xECM client configured".to_string())
         }
         _ => {
+            eprintln!("[xecm] set_xecm_config: clearing client");
             *guard = None;
             Ok("xECM client cleared".to_string())
         }
     }
+}
+
+#[derive(serde::Serialize)]
+struct XecmConnectResult {
+    ticket: String,
+    workspaces: Vec<serde_json::Value>,
 }
 
 /// Authenticate and list available workspaces.
@@ -106,7 +116,7 @@ async fn xecm_connect(
     base_url: String,
     username: String,
     password: String,
-) -> Result<Vec<serde_json::Value>, String> {
+) -> Result<XecmConnectResult, String> {
     let ticket = XecmClient::authenticate(&base_url, &username, &password)
         .await
         .map_err(|e| e.to_string())?;
@@ -115,15 +125,20 @@ async fn xecm_connect(
         .await
         .map_err(|e| e.to_string())?;
 
-    Ok(workspaces
-        .into_iter()
-        .filter(|w| w.container)
-        .map(|w| serde_json::json!({
-            "name": w.name,
-            "id": w.id,
-            "type": w.type_,
-        }))
-        .collect())
+    eprintln!("[xecm] xecm_connect: authenticated, ticket_len={}", ticket.len());
+
+    Ok(XecmConnectResult {
+        ticket,
+        workspaces: workspaces
+            .into_iter()
+            .filter(|w| w.container)
+            .map(|w| serde_json::json!({
+                "name": w.name,
+                "id": w.id,
+                "type": w.type_,
+            }))
+            .collect(),
+    })
 }
 
 fn close_behavior<R: tauri::Runtime>(window: &tauri::Window<R>) -> String {

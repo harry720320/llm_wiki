@@ -38,7 +38,8 @@
 - **벡터 의미 검색** — LanceDB 기반의 선택적 임베딩 검색으로, OpenAI 호환 엔드포인트를 지원합니다
 - **영속 인제스트 큐** — 직렬 처리, 충돌 복구, 취소, 재시도, 진행 상황 시각화를 지원합니다
 - **폴더 가져오기** — 디렉터리 구조를 유지하며 재귀적으로 가져오고, 폴더 컨텍스트를 LLM 분류 힌트로 사용합니다
-- **소스 폴더 자동 감시** — `raw/sources/`의 외부 변경을 감지하고 인제스트/삭제 정리 흐름과 동기화합니다
+- **소스 폴더 자동 감시** — `raw/sources/`의 외부 변경을 감지하고 인제스트/삭제 정리 흐름과 동기화합니다. 로컬 파일시스템 감시(notify)와 xECM 폴링 기반 감시(엔터프라이즈 콘텐츠 서버용)를 지원합니다
+- **xECM (Extended ECM) 통합** — OpenText Content Server 리포지토리에 연결하여 엔터프라이즈 워크스페이스에서 문서를 직접 탐색하고 인제스트합니다 (주문형 콘텐츠 가져오기 및 MD5 기반 캐싱)
 - **Deep Research** — LLM에 최적화된 검색 주제와 Tavily, SerpApi, SearXNG 기반 다중 쿼리 웹 검색을 사용하고, 결과를 자동으로 Wiki에 인제스트합니다
 - **비동기 리뷰 시스템** — LLM이 사람의 판단이 필요한 항목을 표시하고, 사전 정의된 작업과 미리 생성된 검색 쿼리를 제공합니다
 - **Chrome Web Clipper** — 웹 페이지를 한 번의 클릭으로 캡처하고 지식 베이스에 자동 인제스트합니다
@@ -358,6 +359,21 @@ LLM Wiki는 문서를 자동으로 정리되고 서로 연결된 지식 베이�
 - **15분 timeout** — 긴 인제스트 작업이 너무 일찍 실패하지 않습니다
 - **dataVersion signaling** — Wiki 콘텐츠가 변경되면 그래프와 UI가 자동 새로고침됩니다
 
+### 19. xECM (Extended ECM) 통합
+
+LLM Wiki를 OpenText Extended ECM(Content Server) 리포지토리에 직접 연결:
+
+- **인증된 액세스** — 사용자 이름/비밀번호 또는 티켓 기반 인증으로 모든 xECM/OTCS 인스턴스의 REST API에 연결
+- **가상 `raw/sources/`** — xECM 문서가 `raw/sources/` 아래에 파일로 표시됨 (로컬 다운로드 불필요). 콘텐츠는 필요 시 가져오며 MD5 기반으로 캐싱
+- **폴링 기반 변경 감지** — 설정 가능한 폴링 간격(최소 10초)으로 재귀적 스냅샷 비교를 통해 신규/수정/삭제된 문서를 감지
+- **경로-노드 해석** — 파일 경로를 xECM 노드 ID로 투명하게 매핑. 빠른 재검색을 위한 인메모리 캐싱 포함
+- **재귀적 스냅샷** — 반복적 트리 순회(스택 기반, 재귀 제한 없음)로 완전한 `HashMap<u64, XecmNode>`를 생성하여 변경 감지에 사용
+- **읽기 전용 강제** — xECM 파일은 LLM Wiki 내에서 삭제하거나 수정할 수 없습니다. 콘텐츠는 xECM에서 직접 관리하세요
+- **전체 추출 파이프라인** — xECM의 PDF 및 Office 문서는 로컬 파일과 동일한 텍스트 추출 파이프라인(pdfium + office_oxide)을 통과
+- **Take/Restore 상태 패턴** — `XecmClient`는 비동기 작업 전에 `AppState`에서 임시로 꺼내고 호출 완료 후 다시 넣습니다. MutexGuard가 `.await` 경계를 넘지 않도록 하기 위함입니다
+
+**설정 → Source Watch**에서 xECM 서버 URL, 워크스페이스 이름, 자격 증명을 구성하세요. xECM 프로젝트가 열리면 LLM Wiki가 자동으로 설정을 복원하고 폴링 감시를 시작합니다.
+
 ## 기술 스택
 
 | 계층 | 기술 |
@@ -375,6 +391,7 @@ LLM Wiki는 문서를 자동으로 정리되고 서로 연결된 지식 베이�
 | State | Zustand |
 | LLM | Streaming fetch(OpenAI, Anthropic, Google, Ollama, Custom) |
 | Web Search | Tavily, SerpApi, SearXNG JSON API |
+| xECM | OpenText Content Server REST API (OTCSTicket 인증) |
 
 ## 설치
 
@@ -449,7 +466,7 @@ my-wiki/
 ├── purpose.md              # 목표, 핵심 질문, 연구 범위
 ├── schema.md               # Wiki 구조 규칙, 페이지 타입
 ├── raw/
-│   ├── sources/            # 업로드된 문서(불변)
+│   ├── sources/            # 업로드된 문서(불변), 또는 xECM을 통해 가상화
 │   └── assets/             # 로컬 이미지
 ├── wiki/
 │   ├── index.md            # 콘텐츠 카탈로그

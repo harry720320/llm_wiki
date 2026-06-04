@@ -38,7 +38,8 @@
 - **向量语义搜索** — 可选的 embedding 检索，基于 LanceDB，支持任意 OpenAI 兼容端点
 - **持久化摄入队列** — 串行处理，崩溃恢复，取消/重试，进度可视化
 - **文件夹导入** — 递归导入保留目录结构，文件夹路径作为 LLM 分类上下文
-- **Source 文件夹自动监听** — 检测 `raw/sources/` 的外部变更，并同步触发摄入或删除清理
+- **Source 文件夹自动监听** — 检测 `raw/sources/` 的外部变更，并同步触发摄入或删除清理；支持本地文件系统监听（notify）和 xECM 轮询监听企业内容服务器
+- **xECM（Extended ECM）集成** — 连接 OpenText Content Server 仓库，直接浏览和摄入企业工作区中的文档，按需获取内容并基于 MD5 缓存
 - **深度研究** — LLM 智能生成搜索主题，通过 Tavily、SerpApi 或 SearXNG 进行多查询网络搜索，研究结果自动摄入 Wiki
 - **异步审核系统** — LLM 在摄入时标记需人工判断的项，预定义操作，预生成搜索查询
 - **Chrome 网页剪藏** — 一键捕获网页内容，自动摄入知识库
@@ -350,6 +351,21 @@ LLM Wiki 是一个跨平台桌面应用，能将你的文档自动转化为有�
 - **15 分钟超时** —— 长时间摄入操作不会过早失败
 - **dataVersion 信号** —— 图谱和 UI 在 Wiki 内容变更时自动刷新
 
+### 19. xECM（Extended ECM）集成
+
+将 LLM Wiki 直接连接到 OpenText Extended ECM（Content Server）仓库：
+
+- **认证访问** — 通过用户名/密码或 ticket 认证连接到任何 xECM/OTCS 实例的 REST API
+- **虚拟 `raw/sources/`** — xECM 文档以文件形式出现在 `raw/sources/` 下，无需本地下载；内容按需获取，基于 MD5 缓存
+- **轮询变更检测** — 可配置轮询间隔（最低 10 秒），通过比较递归快照检测新增、修改和删除的文档
+- **路径到节点解析** — 透明地将文件路径映射到 xECM 节点 ID，带内存缓存以加速重复查找
+- **递归快照** — 迭代树遍历（基于栈，无递归限制）创建完整的 `HashMap<u64, XecmNode>` 用于变更检测
+- **只读保护** — xECM 文件无法从 LLM Wiki 内删除或修改；请直接在 xECM 中管理内容
+- **完整提取管道** — 来自 xECM 的 PDF 和 Office 文档经过与本地文件相同的文本提取管道（pdfium + office_oxide）
+- **Take/Restore 状态模式** — `XecmClient` 在异步操作前临时从 `AppState` 中取出，调用完成后放回，避免 MutexGuard 跨越 `.await` 边界
+
+在 **设置 → Source Watch** 中配置 xECM 服务器 URL、工作区名称和凭据。打开 xECM 项目时，LLM Wiki 会自动恢复配置并启动轮询监听。
+
 ## 技术栈
 
 | 层级 | 技术 |
@@ -367,6 +383,7 @@ LLM Wiki 是一个跨平台桌面应用，能将你的文档自动转化为有�
 | 状态管理 | Zustand |
 | LLM | 流式 fetch（OpenAI、Anthropic、Google、Ollama、自定义） |
 | 网络搜索 | Tavily、SerpApi、SearXNG JSON API |
+| xECM | OpenText Content Server REST API（OTCSTicket 认证） |
 
 ## 安装
 
@@ -440,7 +457,7 @@ my-wiki/
 ├── purpose.md              # 目标、关键问题、研究范围
 ├── schema.md               # Wiki 结构规则、页面类型
 ├── raw/
-│   ├── sources/            # 上传的文档（不可变）
+│   ├── sources/            # 上传的文档（不可变），或通过 xECM 虚拟化
 │   └── assets/             # 本地图片
 ├── wiki/
 │   ├── index.md            # 内容目录

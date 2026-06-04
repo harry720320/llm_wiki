@@ -209,7 +209,9 @@ pub fn start_project_file_watcher(
         let auto_ingest = source_watch_config.auto_ingest;
         let poll_interval = source_watch_config.poll_interval_secs.unwrap_or(30);
         let xecm_active = app.state::<XecmState>().0.lock().ok().map(|g| g.is_some()).unwrap_or(false);
+        eprintln!("[xecm-watcher] xECM active: {xecm_active}");
         if xecm_active {
+            eprintln!("[xecm-watcher] starting poll watcher (interval={poll_interval}s)");
             start_xecm_poll_watcher(
                 app.clone(),
                 project_id.clone(),
@@ -370,6 +372,7 @@ fn start_xecm_poll_watcher(
     let snapshot_path = format!("{}/{}", project_path, XECM_SNAPSHOT_FILE);
 
     std::thread::spawn(move || {
+        eprintln!("[xecm-watcher] poll watcher thread spawned");
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_time()
             .build()
@@ -384,6 +387,7 @@ fn start_xecm_poll_watcher(
 
             loop {
                 std::thread::sleep(std::time::Duration::from_secs(interval));
+                eprintln!("[xecm-watcher] poll cycle: checking for changes");
 
                 // Obtain state from the app handle (safe in spawned thread because
                 // app is Clone+Send+'static and the state is globally managed).
