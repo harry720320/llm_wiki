@@ -43,7 +43,7 @@
 - **深度研究** — LLM 智能生成搜索主题，通过 Tavily、SerpApi 或 SearXNG 进行多查询网络搜索，研究结果自动摄入 Wiki
 - **异步审核系统** — LLM 在摄入时标记需人工判断的项，预定义操作，预生成搜索查询
 - **Chrome 网页剪藏** — 一键捕获网页内容，自动摄入知识库
-- **本地 HTTP API + AI Agent Skill** — 内置 `127.0.0.1:19828` JSON API（Token 鉴权），支持 Hybrid 检索、文件读取、知识图谱遍历、源资料重新扫描；配套 [agent skill](https://github.com/nashsu/llm_wiki_skill) 一行命令接入 Claude Code / Codex（`npx skills add …`）
+- **本地 HTTP API + MCP Server + AI Agent Skill** — 内置 `127.0.0.1:19828` JSON API 和随包提供的 MCP Server，支持 Hybrid 检索、文件读取、知识图谱遍历、源资料重新扫描；配套 [agent skill](https://github.com/nashsu/llm_wiki_skill) 一行命令接入 Claude Code / Codex（`npx skills add …`）
 
 ## 这是什么？
 
@@ -424,7 +424,7 @@ npm run tauri build    # 生产构建
 8. 查看 **审核** 处理需要你关注的项目
 9. 定期运行 **Lint** 维护 Wiki 健康度
 
-## 本地 HTTP API + AI Agent Skill
+## 本地 HTTP API + MCP Server + AI Agent Skill
 
 LLM Wiki 内置一个本地 HTTP API（监听 `http://127.0.0.1:19828`，Token 鉴权，仅本机可达），任何外部工具——包括 **Claude Code**、**Codex** 这类 AI Agent，或者任意能发 HTTP 请求的脚本——都可以直接查询你的知识库：
 
@@ -435,7 +435,9 @@ LLM Wiki 内置一个本地 HTTP API（监听 `http://127.0.0.1:19828`，Token �
 - `GET /api/v1/projects/{id}/graph` —— Wikilinks 知识图谱
 - `POST /api/v1/projects/{id}/sources/rescan` —— 触发后端重新扫描
 
-在 **设置 → API 服务** 中开启 API 并生成 Token。
+在 **设置 → API + MCP** 中开启 API、生成 Token，并按需选择是否允许本机无鉴权访问。
+
+对于兼容 MCP 的客户端，LLM Wiki 还内置了 `mcp-server/`。执行 `npm run mcp:build` 构建后，**设置 → API + MCP** 会展示一份可复制的 MCP 客户端配置，并自动填入当前机器上的真实入口路径。MCP 工具复用同一套 API 能力，因此 Agent 可以直接列出项目、读取文件、执行 Hybrid 检索、查看图谱和触发资料源重新扫描，不需要再手写 HTTP 调用。
 
 ### 一条命令把 AI Agent 接进你的知识库
 

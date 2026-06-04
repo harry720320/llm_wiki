@@ -43,7 +43,7 @@
 - **Deep Research** — LLM-optimized search topics, multi-query web search via Tavily, SerpApi, or SearXNG, auto-ingest results into wiki
 - **Async Review System** — LLM flags items for human judgment, predefined actions, pre-generated search queries
 - **Chrome Web Clipper** — one-click web page capture with auto-ingest into knowledge base
-- **Local HTTP API + AI Agent Skill** — built-in `127.0.0.1:19828` JSON API (token-protected) for hybrid search, file read, graph traversal, and source rescan; ready-made [agent skill](https://github.com/nashsu/llm_wiki_skill) installs into Claude Code / Codex with one command (`npx skills add …`)
+- **Local HTTP API + MCP Server + AI Agent Skill** — built-in `127.0.0.1:19828` JSON API and bundled MCP server for hybrid search, file read, graph traversal, and source rescan; ready-made [agent skill](https://github.com/nashsu/llm_wiki_skill) installs into Claude Code / Codex with one command (`npx skills add …`)
 
 ## What is this?
 
@@ -424,7 +424,7 @@ npm run tauri build    # Production build
 8. Check **Review** for items needing your attention
 9. Run **Lint** periodically to maintain wiki health
 
-## Local HTTP API + AI Agent Skill
+## Local HTTP API + MCP Server + AI Agent Skill
 
 LLM Wiki ships a built-in local HTTP API at `http://127.0.0.1:19828` (token-protected, `127.0.0.1`-only) so external tools — including AI agents like **Claude Code**, **Codex**, or any HTTP-capable script — can query your wiki:
 
@@ -435,7 +435,9 @@ LLM Wiki ships a built-in local HTTP API at `http://127.0.0.1:19828` (token-prot
 - `GET /api/v1/projects/{id}/graph` — wikilinks graph
 - `POST /api/v1/projects/{id}/sources/rescan` — trigger a backend rescan
 
-Enable + generate a token in **Settings → API Server**.
+Enable the API, generate a token, and choose whether local unauthenticated access is allowed in **Settings → API + MCP**.
+
+For MCP-compatible clients, LLM Wiki also includes a local MCP server in `mcp-server/`. After building it with `npm run mcp:build`, **Settings → API + MCP** shows a copyable MCP client configuration with the correct local path for your machine. The MCP tools call the same API surface, so agent clients can list projects, read files, run hybrid search, inspect the graph, and trigger source rescans without custom HTTP glue code.
 
 ### Plug your AI agent in with one command
 

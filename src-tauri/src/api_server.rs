@@ -220,6 +220,7 @@ fn handle_request(
             "authConfigured": api_token(app).is_some(),
             "tokenSource": api_token_source(app),
             "enabled": api_enabled(app),
+            "mcpEnabled": api_mcp_enabled(app),
             "allowUnauthenticated": api_allow_unauthenticated(app),
         }));
     }
@@ -470,6 +471,17 @@ fn api_enabled(app: &AppHandle) -> bool {
         .and_then(|v| v.get("enabled"))
         .and_then(Value::as_bool)
         .unwrap_or(true)
+}
+
+fn api_mcp_enabled(app: &AppHandle) -> bool {
+    let Some(parsed) = load_app_state(app) else {
+        return false;
+    };
+    parsed
+        .get("apiConfig")
+        .and_then(|v| v.get("mcpEnabled"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
 }
 
 fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
@@ -1322,6 +1334,7 @@ mod tests {
             "apiConfig": {
                 "enabled": false,
                 "allowUnauthenticated": true,
+                "mcpEnabled": true,
                 "token": "abc"
             }
         });
@@ -1337,6 +1350,12 @@ mod tests {
             .and_then(Value::as_bool)
             .unwrap_or(false);
         assert!(allow_unauthenticated);
+        let mcp_enabled = payload
+            .get("apiConfig")
+            .and_then(|v| v.get("mcpEnabled"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        assert!(mcp_enabled);
         let token_source = payload
             .get("apiConfig")
             .and_then(|v| v.get("token"))
@@ -1354,5 +1373,11 @@ mod tests {
             .unwrap_or(true);
         // Fail-open by design — see `api_enabled` doc comment.
         assert!(enabled_missing);
+        let mcp_enabled_missing = missing
+            .get("apiConfig")
+            .and_then(|v| v.get("mcpEnabled"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        assert!(!mcp_enabled_missing);
     }
 }

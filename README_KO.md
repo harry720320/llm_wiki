@@ -43,7 +43,7 @@
 - **Deep Research** — LLM에 최적화된 검색 주제와 Tavily, SerpApi, SearXNG 기반 다중 쿼리 웹 검색을 사용하고, 결과를 자동으로 Wiki에 인제스트합니다
 - **비동기 리뷰 시스템** — LLM이 사람의 판단이 필요한 항목을 표시하고, 사전 정의된 작업과 미리 생성된 검색 쿼리를 제공합니다
 - **Chrome Web Clipper** — 웹 페이지를 한 번의 클릭으로 캡처하고 지식 베이스에 자동 인제스트합니다
-- **로컬 HTTP API + AI Agent Skill** — 내장 `127.0.0.1:19828` JSON API(Token 보호)를 통해 하이브리드 검색, 파일 읽기, 그래프 탐색, 소스 재스캔을 지원합니다. 바로 사용할 수 있는 [agent skill](https://github.com/nashsu/llm_wiki_skill)은 한 줄 명령(`npx skills add ...`)으로 Claude Code / Codex에 설치할 수 있습니다
+- **로컬 HTTP API + MCP Server + AI Agent Skill** — 내장 `127.0.0.1:19828` JSON API와 번들 MCP Server를 통해 하이브리드 검색, 파일 읽기, 그래프 탐색, 소스 재스캔을 지원합니다. 바로 사용할 수 있는 [agent skill](https://github.com/nashsu/llm_wiki_skill)은 한 줄 명령(`npx skills add ...`)으로 Claude Code / Codex에 설치할 수 있습니다
 
 ## 이게 무엇인가요?
 
@@ -433,7 +433,7 @@ npm run tauri build    # Production build
 8. **Review**에서 주의가 필요한 항목을 확인합니다
 9. **Lint**를 주기적으로 실행해 Wiki 상태를 유지합니다
 
-## 로컬 HTTP API + AI Agent Skill
+## 로컬 HTTP API + MCP Server + AI Agent Skill
 
 LLM Wiki에는 `http://127.0.0.1:19828`의 내장 로컬 HTTP API가 포함되어 있습니다(Token 보호, `127.0.0.1` 전용). 이를 통해 **Claude Code**, **Codex** 또는 HTTP를 사용할 수 있는 스크립트 같은 외부 도구가 Wiki에 쿼리할 수 있습니다.
 
@@ -444,7 +444,9 @@ LLM Wiki에는 `http://127.0.0.1:19828`의 내장 로컬 HTTP API가 포함되�
 - `GET /api/v1/projects/{id}/graph` — wikilinks graph
 - `POST /api/v1/projects/{id}/sources/rescan` — backend rescan trigger
 
-**Settings → API Server**에서 활성화하고 token을 생성하세요.
+**Settings → API + MCP**에서 API를 활성화하고 token을 생성할 수 있습니다. 필요하면 로컬 unauthenticated access도 켜거나 끌 수 있습니다.
+
+MCP 호환 클라이언트를 위해 LLM Wiki는 `mcp-server/`도 함께 제공합니다. `npm run mcp:build`로 빌드한 뒤 **Settings → API + MCP**에서 현재 머신의 실제 경로가 들어간 MCP client configuration을 복사할 수 있습니다. MCP tools는 같은 API surface를 사용하므로 에이전트는 별도 HTTP glue code 없이 project list, file read, hybrid search, graph inspect, source rescan을 실행할 수 있습니다.
 
 ### 한 줄 명령으로 AI 에이전트 연결하기
 

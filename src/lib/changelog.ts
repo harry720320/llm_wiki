@@ -26,6 +26,58 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.4.20",
+    date: "2026-06-04",
+    highlights: {
+      en: [
+        "Fixed the macOS titlebar so it keeps native window dragging while following light and dark mode.",
+      ],
+      zh: [
+        "修复 macOS 顶部标题栏：保留系统原生拖动，同时跟随亮色和暗色模式。",
+      ],
+    },
+  },
+  {
+    version: "0.4.19",
+    date: "2026-06-03",
+    highlights: {
+      en: [
+        "Fixed the macOS traffic-light titlebar drag area while keeping Windows and Linux on their native window controls.",
+      ],
+      zh: [
+        "修复 macOS 顶部红黄绿按钮区域无法拖动窗口的问题，同时保持 Windows 和 Linux 使用原生窗口控制。",
+      ],
+    },
+  },
+  {
+    version: "0.4.18",
+    date: "2026-06-03",
+    highlights: {
+      en: [
+        "Fixed close-window behavior on macOS and restored a clear Quit / Hide Window confirmation when asking before close.",
+        "Improved Linux compatibility so the window minimizes instead of hiding when system tray support is unavailable.",
+      ],
+      zh: [
+        "修复 macOS 关闭窗口行为，并在询问模式下恢复清晰的「退出 / 隐藏窗口」确认。",
+        "改进 Linux 兼容性：系统托盘不可用时改为最小化，避免窗口隐藏后无法恢复。",
+      ],
+    },
+  },
+  {
+    version: "0.4.17",
+    date: "2026-06-03",
+    highlights: {
+      en: [
+        "Added a local MCP server for agent clients, using the same project, search, graph, and file APIs as the desktop app.",
+        "Updated Settings to manage API + MCP access together, including token guidance and a copyable MCP client configuration.",
+      ],
+      zh: [
+        "新增本地 MCP 服务，方便智能体客户端通过与桌面端一致的项目、搜索、图谱和文件接口访问 LLM Wiki。",
+        "设置中新增 API + MCP 管理入口，包含访问开关、token 提示和可复制的 MCP 客户端配置。",
+      ],
+    },
+  },
+  {
     version: "0.4.16",
     date: "2026-05-29",
     highlights: {

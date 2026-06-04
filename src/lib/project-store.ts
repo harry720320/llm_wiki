@@ -162,7 +162,7 @@ const GENERAL_CONFIG_KEY = "generalConfig"
 
 export const DEFAULT_GENERAL_CONFIG: GeneralConfig = {
   autostart: false,
-  closeBehavior: "ask",
+  closeBehavior: "minimize",
 }
 
 export function normalizeGeneralConfig(config?: Partial<GeneralConfig> | null): GeneralConfig {

@@ -14,6 +14,7 @@ use tauri::Manager;
 use crate::xecm_client::{XecmClient, XecmConfig};
 
 struct CloseBehaviorState(Mutex<String>);
+struct TrayAvailabilityState(Mutex<bool>);
 
 struct XecmState(Mutex<Option<XecmClient>>);
 
@@ -40,6 +41,49 @@ fn api_server_reload_config() -> String {
         Ok("ok".to_string())
     })
     .unwrap_or_else(|e| format!("error: {e}"))
+}
+
+#[tauri::command]
+fn mcp_server_entry_path(app: tauri::AppHandle) -> Result<String, String> {
+    run_guarded("mcp_server_entry_path", || {
+        let relative = std::path::Path::new("mcp-server")
+            .join("dist")
+            .join("src")
+            .join("index.js");
+        let mut candidates = Vec::new();
+
+        let mut push_repo_candidates = |base: std::path::PathBuf| {
+            candidates.push(base.join(&relative));
+            candidates.push(base.join("..").join(&relative));
+            candidates.push(base.join("..").join("..").join(&relative));
+        };
+
+        push_repo_candidates(std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")));
+        if let Ok(cwd) = std::env::current_dir() {
+            push_repo_candidates(cwd);
+        }
+        if let Ok(resource_dir) = app.path().resource_dir() {
+            candidates.push(resource_dir.join(&relative));
+        }
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(exe_dir) = exe.parent() {
+                candidates.push(exe_dir.join(&relative));
+                candidates.push(exe_dir.join("..").join("Resources").join(&relative));
+            }
+        }
+
+        for candidate in &candidates {
+            if candidate.is_file() {
+                return Ok(candidate
+                    .canonicalize()
+                    .unwrap_or_else(|_| candidate.clone())
+                    .to_string_lossy()
+                    .into_owned());
+            }
+        }
+
+        Err("MCP server entry was not found. Run `npm run mcp:build` from the LLM Wiki repository, then reopen Settings.".to_string())
+    })
 }
 
 /// Apply a proxy configuration to the process env immediately, so the
@@ -147,7 +191,16 @@ fn close_behavior<R: tauri::Runtime>(window: &tauri::Window<R>) -> String {
         .0
         .lock()
         .map(|value| value.clone())
-        .unwrap_or_else(|_| "ask".to_string())
+        .unwrap_or_else(|_| "minimize".to_string())
+}
+
+fn tray_available<R: tauri::Runtime>(window: &tauri::Window<R>) -> bool {
+    window
+        .state::<TrayAvailabilityState>()
+        .0
+        .lock()
+        .map(|value| *value)
+        .unwrap_or(false)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -198,11 +251,16 @@ pub fn run() {
             app.manage(commands::claude_cli::ClaudeCliState::default());
             app.manage(commands::codex_cli::CodexCliState::default());
             app.manage(commands::file_sync::FileSyncState::default());
-            app.manage(CloseBehaviorState(Mutex::new("ask".to_string())));
+            app.manage(CloseBehaviorState(Mutex::new("minimize".to_string())));
             app.manage(XecmState(Mutex::new(None)));
-            if let Err(err) = tray::create_tray(app.handle()) {
-                eprintln!("[tray] system tray unavailable, continuing without it: {err}");
-            }
+            let tray_available = match tray::create_tray(app.handle()) {
+                Ok(()) => true,
+                Err(err) => {
+                    eprintln!("[tray] system tray unavailable, continuing without it: {err}");
+                    false
+                }
+            };
+            app.manage(TrayAvailabilityState(Mutex::new(tray_available)));
             api_server::start_api_server(app.handle().clone());
             Ok(())
         })
@@ -229,6 +287,7 @@ pub fn run() {
             clip_server_status,
             api_server_status,
             api_server_reload_config,
+            mcp_server_entry_path,
             commands::vectorstore::vector_upsert,
             commands::vectorstore::vector_search,
             commands::vectorstore::vector_delete,
@@ -274,17 +333,25 @@ pub fn run() {
                         });
                     }
                     "minimize" => {
-                        let _ = window.hide();
+                        if tray_available(window) {
+                            let _ = window.hide();
+                        } else {
+                            let _ = window.minimize();
+                        }
                     }
                     _ => {
                         tauri::async_runtime::spawn(async move {
-                            use tauri_plugin_dialog::DialogExt;
+                            use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
                             let confirmed = app
                                 .dialog()
                                 .message(
-                                    "Quit LLM Wiki? Choose OK to exit. Choose Cancel to hide the window and keep background features running.",
+                                    "Quit LLM Wiki? Choose Quit to exit. Choose Hide Window to keep background features running.",
                                 )
                                 .title("LLM Wiki")
+                                .buttons(MessageDialogButtons::OkCancelCustom(
+                                    "Quit".to_string(),
+                                    "Hide Window".to_string(),
+                                ))
                                 .kind(tauri_plugin_dialog::MessageDialogKind::Warning)
                                 .blocking_show();
 
