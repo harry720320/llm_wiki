@@ -203,6 +203,7 @@ export interface XecmConfig {
   workspaceName: string
   workspaceNodeId: number
   username: string
+  password: string
   ticket: string | null
   pollIntervalSeconds: number
 }
@@ -468,6 +469,7 @@ export const useWikiStore = create<WikiState>((set) => ({
     workspaceName: "",
     workspaceNodeId: 0,
     username: "",
+    password: "",
     ticket: null,
     pollIntervalSeconds: 30,
   },

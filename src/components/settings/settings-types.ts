@@ -86,6 +86,7 @@ export interface SettingsDraft {
   xecmWorkspaceName: string
   xecmWorkspaceNodeId: number
   xecmUsername: string
+  xecmPassword: string
   xecmTicket: string
   xecmPollIntervalSeconds: number
 }

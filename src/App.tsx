@@ -435,6 +435,7 @@ function App() {
           workspaceName: "",
           workspaceNodeId: 0,
           username: "",
+          password: "",
           ticket: null,
           pollIntervalSeconds: 30,
         })

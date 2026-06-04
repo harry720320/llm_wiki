@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Mutex;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct XecmNode {
@@ -48,6 +49,8 @@ pub struct XecmConfig {
     pub username: String,
     #[serde(default)]
     pub ticket: Option<String>,
+    #[serde(default)]
+    pub password: String,
     pub poll_interval_seconds: u64,
 }
 
@@ -87,26 +90,45 @@ impl From<reqwest::Error> for XecmError {
 pub struct XecmClient {
     http: reqwest::Client,
     config: XecmConfig,
+    ticket: Mutex<Option<String>>,
     path_cache: HashMap<String, u64>,
     cache_dir: PathBuf,
 }
 
 impl XecmClient {
     pub fn new(config: XecmConfig, cache_dir: PathBuf) -> Self {
+        let ticket = config.ticket.clone();
         Self {
             http: reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(30))
                 .build()
                 .unwrap_or_default(),
             config,
+            ticket: Mutex::new(ticket),
             path_cache: HashMap::new(),
             cache_dir,
         }
     }
 
-    fn ticket(&self) -> Result<&str, XecmError> {
-        self.config.ticket.as_deref()
+    fn ticket(&self) -> Result<String, XecmError> {
+        self.ticket.lock().ok()
+            .and_then(|g| g.clone())
             .ok_or_else(|| XecmError::Auth("no ticket configured".to_string()))
+    }
+
+    async fn re_authenticate(&self) -> Result<(), XecmError> {
+        let password = self.config.password.clone();
+        if password.is_empty() {
+            return Err(XecmError::Auth("no password stored, cannot re-authenticate".to_string()));
+        }
+        let new_ticket = Self::authenticate(
+            &self.config.base_url,
+            &self.config.username,
+            &password,
+        ).await?;
+        *self.ticket.lock().map_err(|_| XecmError::Auth("lock poisoned".to_string()))? = Some(new_ticket);
+        eprintln!("[xecm] auto-re-authenticated: new ticket obtained");
+        Ok(())
     }
 
     pub async fn authenticate(
@@ -153,7 +175,8 @@ impl XecmClient {
     }
 
     pub async fn resolve_workspace(&self) -> Result<XecmNode, XecmError> {
-        let workspaces = Self::list_workspaces(&self.config.base_url, self.ticket()?).await?;
+        let ticket = self.ticket()?;
+        let workspaces = Self::list_workspaces(&self.config.base_url, &ticket).await?;
         workspaces
             .into_iter()
             .find(|w| w.name == self.config.workspace_name)
@@ -166,15 +189,24 @@ impl XecmClient {
     }
 
     pub async fn get_node(&self, node_id: u64) -> Result<XecmNode, XecmError> {
-        let resp = self
-            .http
-            .get(format!("{}/nodes/{node_id}", self.config.base_url))
-            .header("OTCSTicket", self.ticket()?)
-            .send()
-            .await?;
-        Self::check_status(&resp)?;
-        let node_resp: XecmNodeResponse = resp.json().await?;
-        Ok(node_resp.data)
+        let mut retried = false;
+        loop {
+            let ticket = self.ticket()?;
+            let resp = self
+                .http
+                .get(format!("{}/nodes/{node_id}", self.config.base_url))
+                .header("OTCSTicket", &ticket)
+                .send()
+                .await?;
+            if resp.status().as_u16() == 401 && !retried {
+                self.re_authenticate().await?;
+                retried = true;
+                continue;
+            }
+            Self::check_status(&resp)?;
+            let node_resp: XecmNodeResponse = resp.json().await?;
+            return Ok(node_resp.data);
+        }
     }
 
     pub async fn list_directory(
@@ -182,18 +214,27 @@ impl XecmClient {
         node_id: u64,
         page: u32,
     ) -> Result<(Vec<XecmNode>, u32), XecmError> {
-        let resp = self
-            .http
-            .get(format!(
-                "{}/nodes/{node_id}/nodes?limit=100&page={page}",
-                self.config.base_url
-            ))
-            .header("OTCSTicket", self.ticket()?)
-            .send()
-            .await?;
-        Self::check_status(&resp)?;
-        let list: XecmNodeListResponse = resp.json().await?;
-        Ok((list.data, list.page_total.unwrap_or(1)))
+        let mut retried = false;
+        loop {
+            let ticket = self.ticket()?;
+            let resp = self
+                .http
+                .get(format!(
+                    "{}/nodes/{node_id}/nodes?limit=100&page={page}",
+                    self.config.base_url
+                ))
+                .header("OTCSTicket", &ticket)
+                .send()
+                .await?;
+            if resp.status().as_u16() == 401 && !retried {
+                self.re_authenticate().await?;
+                retried = true;
+                continue;
+            }
+            Self::check_status(&resp)?;
+            let list: XecmNodeListResponse = resp.json().await?;
+            return Ok((list.data, list.page_total.unwrap_or(1)));
+        }
     }
 
     pub async fn list_all_children(&self, node_id: u64) -> Result<Vec<XecmNode>, XecmError> {
@@ -221,19 +262,28 @@ impl XecmClient {
             }
         }
 
-        let resp = self
-            .http
-            .get(format!("{base_url}/nodes/{node_id}/content", base_url = self.config.base_url))
-            .header("OTCSTicket", self.ticket()?)
-            .send()
-            .await?;
-        Self::check_status(&resp)?;
-        let bytes = resp.bytes().await?.to_vec();
+        let mut retried = false;
+        loop {
+            let ticket = self.ticket()?;
+            let resp = self
+                .http
+                .get(format!("{base_url}/nodes/{node_id}/content", base_url = self.config.base_url))
+                .header("OTCSTicket", &ticket)
+                .send()
+                .await?;
+            if resp.status().as_u16() == 401 && !retried {
+                self.re_authenticate().await?;
+                retried = true;
+                continue;
+            }
+            Self::check_status(&resp)?;
+            let bytes = resp.bytes().await?.to_vec();
 
-        let _ = std::fs::create_dir_all(&self.cache_dir);
-        let _ = std::fs::write(&cache_path, &bytes);
+            let _ = std::fs::create_dir_all(&self.cache_dir);
+            let _ = std::fs::write(&cache_path, &bytes);
 
-        Ok(bytes)
+            return Ok(bytes);
+        }
     }
 
     pub async fn resolve_path(&mut self, path: &str) -> Result<u64, XecmError> {
@@ -383,6 +433,7 @@ mod tests {
             workspace_node_id: 2000,
             workspace_name: TEST_WORKSPACE.to_string(),
             username: TEST_USERNAME.to_string(),
+            password: TEST_PASSWORD.to_string(),
             ticket: Some(ticket),
             poll_interval_seconds: 30,
         }
@@ -578,6 +629,7 @@ mod tests {
             workspace_node_id: 42,
             workspace_name: "TestWS".into(),
             username: "user1".into(),
+            password: "".into(),
             ticket: Some("ticket123".into()),
             poll_interval_seconds: 60,
         };

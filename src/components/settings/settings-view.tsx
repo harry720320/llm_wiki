@@ -168,6 +168,7 @@ function initialDraft(
     xecmWorkspaceNodeId: xecmConfig.workspaceNodeId,
     xecmUsername: xecmConfig.username,
     xecmPollIntervalSeconds: xecmConfig.pollIntervalSeconds,
+    xecmPassword: xecmConfig.password ?? "",
     xecmTicket: xecmConfig.ticket ?? "",
   }
 }
@@ -443,6 +444,7 @@ export function SettingsView() {
       workspaceName: draft.xecmWorkspaceName,
       workspaceNodeId: draft.xecmWorkspaceNodeId,
       username: draft.xecmUsername,
+      password: draft.xecmPassword,
       ticket: draft.xecmTicket || null,
       pollIntervalSeconds: Math.max(10, Math.min(300, draft.xecmPollIntervalSeconds || 30)),
     }

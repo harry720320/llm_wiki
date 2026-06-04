@@ -45,6 +45,7 @@ export function XecmSection({ draft, setDraft }: Props) {
       })
       setWorkspaces(result.workspaces)
       setDraft("xecmTicket", result.ticket)
+      setDraft("xecmPassword", password)
       setConnected(true)
       setConnectError(null)
     } catch (err) {
@@ -68,6 +69,7 @@ export function XecmSection({ draft, setDraft }: Props) {
     setDraft("xecmWorkspaceName", "")
     setDraft("xecmWorkspaceNodeId", 0)
     setDraft("xecmUsername", "")
+    setDraft("xecmPassword", "")
     setDraft("xecmTicket", "")
     setConnected(false)
     setWorkspaces([])
