@@ -71,7 +71,7 @@ function App() {
                 "- Bigger red dot on the Settings icon\n" +
                 "- Top banner with one-click dismiss\n" +
                 "- Once dismissed, won't reappear for this version",
-              html_url: "https://github.com/nashsu/llm_wiki/releases",
+              html_url: "https://github.com/harry720320/llm_wiki/releases",
               published_at: new Date().toISOString(),
             },
           },
@@ -145,7 +145,7 @@ function App() {
         )
         const result = await checkForUpdates({
           currentVersion: __APP_VERSION__,
-          repo: "nashsu/llm_wiki",
+          repo: "harry720320/llm_wiki",
         })
         if (cancelled) return
         useUpdateStore.getState().setResult(result, Date.now())

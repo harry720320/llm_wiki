@@ -397,7 +397,7 @@ LLM Wiki を OpenText Extended ECM（Content Server）リポジトリに直接�
 
 ### ビルド済みバイナリ
 
-[Releases](https://github.com/nashsu/llm_wiki/releases) からダウンロードできます。
+[Releases](https://github.com/harry720320/llm_wiki/releases) からダウンロードできます。
 
 - **macOS**: `.dmg`（Apple Silicon + Intel）
 - **Windows**: `.msi`
@@ -407,7 +407,7 @@ LLM Wiki を OpenText Extended ECM（Content Server）リポジトリに直接�
 
 ```bash
 # 前提条件: Node.js 20+, Rust 1.70+
-git clone https://github.com/nashsu/llm_wiki.git
+git clone https://github.com/harry720320/llm_wiki.git
 cd llm_wiki
 npm install
 npm run tauri dev      # 開発モード
@@ -488,9 +488,9 @@ my-wiki/
 
 <a href="https://www.star-history.com/?repos=nashsu%2Fllm_wiki&type=date&legend=top-left">
  <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=nashsu/llm_wiki&type=date&theme=dark&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=nashsu/llm_wiki&type=date&legend=top-left" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=nashsu/llm_wiki&type=date&legend=top-left" />
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=harry720320/llm_wiki&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=harry720320/llm_wiki&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=harry720320/llm_wiki&type=date&legend=top-left" />
  </picture>
 </a>
 

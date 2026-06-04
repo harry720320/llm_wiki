@@ -389,7 +389,7 @@ Configure in **Settings → Source Watch** by providing the xECM server URL, wor
 
 ### Pre-built Binaries
 
-Download from [Releases](https://github.com/nashsu/llm_wiki/releases):
+Download from [Releases](https://github.com/harry720320/llm_wiki/releases):
 - **macOS**: `.dmg` (Apple Silicon + Intel)
 - **Windows**: `.msi`
 - **Linux**: `.deb` / `.AppImage`
@@ -398,7 +398,7 @@ Download from [Releases](https://github.com/nashsu/llm_wiki/releases):
 
 ```bash
 # Prerequisites: Node.js 20+, Rust 1.70+
-git clone https://github.com/nashsu/llm_wiki.git
+git clone https://github.com/harry720320/llm_wiki.git
 cd llm_wiki
 npm install
 npm run tauri dev      # Development
@@ -479,9 +479,9 @@ my-wiki/
 
 <a href="https://www.star-history.com/?repos=nashsu%2Fllm_wiki&type=date&legend=top-left">
  <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=nashsu/llm_wiki&type=date&theme=dark&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=nashsu/llm_wiki&type=date&legend=top-left" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=nashsu/llm_wiki&type=date&legend=top-left" />
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=harry720320/llm_wiki&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=harry720320/llm_wiki&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=harry720320/llm_wiki&type=date&legend=top-left" />
  </picture>
 </a>
 

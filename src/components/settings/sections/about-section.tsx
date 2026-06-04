@@ -55,7 +55,7 @@ export function AboutSection() {
     useUpdateStore.getState().setChecking(true)
     const result = await checkForUpdates({
       currentVersion: __APP_VERSION__,
-      repo: "nashsu/llm_wiki",
+      repo: "harry720320/llm_wiki",
     })
     const now = Date.now()
     useUpdateStore.getState().setResult(result, now)
@@ -219,15 +219,15 @@ export function AboutSection() {
            */}
           <a
             className="cursor-pointer underline underline-offset-2 hover:text-primary"
-            href="https://github.com/nashsu/llm_wiki"
+            href="https://github.com/harry720320/llm_wiki"
             onClick={(e) => {
               e.preventDefault()
-              void openUrl("https://github.com/nashsu/llm_wiki").catch((err) => {
+              void openUrl("https://github.com/harry720320/llm_wiki").catch((err) => {
                 console.error("[about] openUrl failed:", err)
               })
             }}
           >
-            github.com/nashsu/llm_wiki
+            github.com/harry720320/llm_wiki
           </a>
         </p>
       </div>

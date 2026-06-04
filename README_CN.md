@@ -389,7 +389,7 @@ LLM Wiki 是一个跨平台桌面应用，能将你的文档自动转化为有�
 
 ### 预编译二进制文件
 
-从 [Releases](https://github.com/nashsu/llm_wiki/releases) 下载：
+从 [Releases](https://github.com/harry720320/llm_wiki/releases) 下载：
 - **macOS**：`.dmg`（Apple Silicon + Intel）
 - **Windows**：`.msi`
 - **Linux**：`.deb` / `.AppImage`
@@ -398,7 +398,7 @@ LLM Wiki 是一个跨平台桌面应用，能将你的文档自动转化为有�
 
 ```bash
 # 前置条件：Node.js 20+, Rust 1.70+
-git clone https://github.com/nashsu/llm_wiki.git
+git clone https://github.com/harry720320/llm_wiki.git
 cd llm_wiki
 npm install
 npm run tauri dev      # 开发模式
@@ -479,9 +479,9 @@ my-wiki/
 
 <a href="https://www.star-history.com/?repos=nashsu%2Fllm_wiki&type=date&legend=top-left">
  <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=nashsu/llm_wiki&type=date&theme=dark&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=nashsu/llm_wiki&type=date&legend=top-left" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=nashsu/llm_wiki&type=date&legend=top-left" />
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=harry720320/llm_wiki&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=harry720320/llm_wiki&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=harry720320/llm_wiki&type=date&legend=top-left" />
  </picture>
 </a>
 

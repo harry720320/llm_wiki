@@ -397,7 +397,7 @@ LLM Wiki를 OpenText Extended ECM(Content Server) 리포지토리에 직접 연�
 
 ### 사전 빌드 바이너리
 
-[Releases](https://github.com/nashsu/llm_wiki/releases)에서 다운로드하세요.
+[Releases](https://github.com/harry720320/llm_wiki/releases)에서 다운로드하세요.
 
 - **macOS**: `.dmg`(Apple Silicon + Intel)
 - **Windows**: `.msi`
@@ -407,7 +407,7 @@ LLM Wiki를 OpenText Extended ECM(Content Server) 리포지토리에 직접 연�
 
 ```bash
 # Prerequisites: Node.js 20+, Rust 1.70+
-git clone https://github.com/nashsu/llm_wiki.git
+git clone https://github.com/harry720320/llm_wiki.git
 cd llm_wiki
 npm install
 npm run tauri dev      # Development
@@ -488,9 +488,9 @@ my-wiki/
 
 <a href="https://www.star-history.com/?repos=nashsu%2Fllm_wiki&type=date&legend=top-left">
  <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=nashsu/llm_wiki&type=date&theme=dark&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=nashsu/llm_wiki&type=date&legend=top-left" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=nashsu/llm_wiki&type=date&legend=top-left" />
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=harry720320/llm_wiki&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=harry720320/llm_wiki&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=harry720320/llm_wiki&type=date&legend=top-left" />
  </picture>
 </a>
 
