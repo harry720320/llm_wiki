@@ -1,7 +1,7 @@
 import { load } from "@tauri-apps/plugin-store"
 import { invoke } from "@tauri-apps/api/core"
 import type { WikiProject } from "@/types/wiki"
-import type { ApiConfig, GeneralConfig, LlmConfig, SearchApiConfig, EmbeddingConfig, MultimodalConfig, OutputLanguage, ProviderConfigs, ProxyConfig, ScheduledImportConfig, SourceWatchConfig, XecmConfig } from "@/stores/wiki-store"
+import type { ApiConfig, GeneralConfig, LlmConfig, SearchApiConfig, EmbeddingConfig, MultimodalConfig, OutputLanguage, ProviderConfigs, ProxyConfig, ScheduledImportConfig, SourceWatchConfig, XecmConfig, CoreContentConfig } from "@/stores/wiki-store"
 import { normalizeSourceWatchConfig } from "@/lib/source-watch-config"
 import { normalizePath } from "@/lib/path-utils"
 
@@ -380,6 +380,46 @@ export async function loadXecmConfig(projectPath: string): Promise<XecmConfig | 
     if (!exists) return null
     const content = await invoke<string>("read_file", { path: configPath, extractImages: false })
     return JSON.parse(content) as XecmConfig
+  } catch {
+    return null
+  }
+}
+
+// ── Core Content config persistence ──────────────────────────────────────────
+// Written directly to the project directory's .llm-wiki/core-content-config.json
+// using Tauri commands, so the Rust backend can also read it without going
+// through the store layer.
+
+export async function saveCoreContentConfig(
+  config: CoreContentConfig,
+  projectPath: string,
+): Promise<void> {
+  const pp = normalizePath(projectPath)
+  const configPath = `${pp}/.llm-wiki/core-content-config.json`
+  // Never persist cookies or CSRF token to disk — they're ephemeral
+  await invoke("write_file_atomic", {
+    path: configPath,
+    contents: JSON.stringify(
+      { ...config, csrfToken: "", cookiesJson: "" },
+      null,
+      2,
+    ),
+  })
+}
+
+export async function loadCoreContentConfig(
+  projectPath: string,
+): Promise<CoreContentConfig | null> {
+  const pp = normalizePath(projectPath)
+  const configPath = `${pp}/.llm-wiki/core-content-config.json`
+  try {
+    const exists = await invoke<boolean>("file_exists", { path: configPath })
+    if (!exists) return null
+    const content = await invoke<string>("read_file", {
+      path: configPath,
+      extractImages: false,
+    })
+    return JSON.parse(content) as CoreContentConfig
   } catch {
     return null
   }
