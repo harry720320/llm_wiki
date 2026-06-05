@@ -272,21 +272,10 @@ async fn core_content_start_login(
         guard.insert(login_id.clone(), tx);
     }
 
-    let webview = tauri::WebviewWindowBuilder::new(
-        &app,
-        &format!("core-content-login-{login_id}"),
-        tauri::WebviewUrl::External(
-            base_url
-                .parse()
-                .map_err(|e| format!("invalid base_url: {e}"))?,
-        ),
-    )
-    .title("Core Content Login")
-    .inner_size(800.0, 600.0)
-    .build()
-    .map_err(|e| format!("failed to create login window: {e}"))?;
-
-    // Inject JS that polls for the CSRF token cookie
+    // JS that polls for the CSRF token cookie after every page load.
+    // Must be an initialization script (not eval) because the login flow
+    // involves multiple page navigations (login → password → MFA → app)
+    // and eval only runs once on the initial page.
     let js = format!(
         r#"(function() {{
   var attempts = 0;
@@ -306,7 +295,21 @@ async fn core_content_start_login(
 }})();"#,
         login_id
     );
-    webview.eval(&js).map_err(|e| format!("failed to inject JS: {e}"))?;
+
+    let webview = tauri::WebviewWindowBuilder::new(
+        &app,
+        &format!("core-content-login-{login_id}"),
+        tauri::WebviewUrl::External(
+            base_url
+                .parse()
+                .map_err(|e| format!("invalid base_url: {e}"))?,
+        ),
+    )
+    .title("Core Content Login")
+    .inner_size(800.0, 600.0)
+    .initialization_script(&js)
+    .build()
+    .map_err(|e| format!("failed to create login window: {e}"))?;
 
     // Wait for login result or channel drop
     let result = rx.await.unwrap_or(CoreContentLoginResult {
