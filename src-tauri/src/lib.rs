@@ -5,6 +5,7 @@ mod panic_guard;
 mod proxy;
 mod tray;
 mod types;
+mod core_content_client;
 mod xecm_client;
 
 use panic_guard::run_guarded;
