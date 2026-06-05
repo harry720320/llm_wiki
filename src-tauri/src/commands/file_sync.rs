@@ -15,7 +15,9 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use walkdir::WalkDir;
 
 use crate::panic_guard::run_guarded;
+use crate::core_content_client::{CoreContentClient, CoreContentSnapshotEntry};
 use crate::xecm_client::XecmClient;
+use crate::CoreContentState;
 use crate::XecmState;
 
 const SNAPSHOT_FILE: &str = ".llm-wiki/file-snapshot.json";
@@ -225,6 +227,22 @@ pub fn start_project_file_watcher(
                 changed_tasks: vec![],
             });
         }
+        let cc_active = app.state::<CoreContentState>().0.lock().ok().map(|g| g.is_some()).unwrap_or(false);
+        eprintln!("[cc-watcher] Core Content active: {cc_active}");
+        if cc_active {
+            eprintln!("[cc-watcher] starting poll watcher (interval={poll_interval}s)");
+            start_core_content_poll_watcher(
+                app.clone(),
+                project_id.clone(),
+                project_path,
+                poll_interval,
+                auto_ingest,
+            );
+            return Ok(FileChangeRescanResult {
+                queue: FileChangeQueue { version: 1, tasks: vec![] },
+                changed_tasks: vec![],
+            });
+        }
         let watcher_generation = WATCHER_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
         ensure_sync_dir(&root)?;
         with_queue_lock(&root, || reset_processing_tasks(&root, &project_id))?;
@@ -359,6 +377,18 @@ struct XecmSnapshotEntry {
     name: String,
     modify_date: Option<String>,
     size: u64,
+}
+
+// ── Core Content poll watcher ──
+
+const CC_POLL_MIN_INTERVAL_SECS: u64 = 10;
+const CC_SNAPSHOT_FILE: &str = ".llm-wiki/core-content-snapshot.json";
+
+#[derive(Debug, Serialize, Deserialize)]
+struct CoreContentSnapshot {
+    folder_node_id: String,
+    last_poll: String,
+    nodes: std::collections::HashMap<String, CoreContentSnapshotEntry>,
 }
 
 fn start_xecm_poll_watcher(
@@ -529,6 +559,163 @@ fn start_xecm_poll_watcher(
                         let _ = std::fs::write(&snapshot_path, json);
                     }
                     last_snapshot = Some(current_entries);
+                }
+            }
+        });
+    });
+}
+
+fn start_core_content_poll_watcher(
+    app: AppHandle,
+    project_id: String,
+    project_path: String,
+    poll_interval_secs: u64,
+    _auto_ingest: bool,
+) {
+    let interval = poll_interval_secs.max(CC_POLL_MIN_INTERVAL_SECS);
+    let snapshot_path = format!("{}/{}", project_path, CC_SNAPSHOT_FILE);
+
+    std::thread::spawn(move || {
+        eprintln!("[cc-watcher] poll watcher thread spawned");
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .expect("Core Content poll watcher tokio runtime");
+
+        rt.block_on(async move {
+            let mut last_snapshot: Option<std::collections::HashMap<String, CoreContentSnapshotEntry>> =
+                std::fs::read_to_string(&snapshot_path)
+                    .ok()
+                    .and_then(|s| serde_json::from_str::<CoreContentSnapshot>(&s).ok())
+                    .map(|s| s.nodes);
+
+            loop {
+                std::thread::sleep(std::time::Duration::from_secs(interval));
+                eprintln!("[cc-watcher] poll cycle: checking for changes");
+
+                let state = app.state::<CoreContentState>();
+
+                let client_opt: Option<CoreContentClient> = {
+                    let mut guard = match state.0.lock() {
+                        Ok(g) => g,
+                        Err(_) => {
+                            eprintln!("[cc-watcher] state poisoned, stopping");
+                            break;
+                        }
+                    };
+                    guard.take()
+                };
+
+                let current_snapshot = match client_opt {
+                    Some(client) => match client.recursive_snapshot().await {
+                        Ok(snap) => {
+                            if let Ok(mut guard) = state.0.lock() {
+                                *guard = Some(client);
+                            }
+                            Some(snap)
+                        }
+                        Err(e) => {
+                            eprintln!("[cc-watcher] snapshot failed: {e}");
+                            if let Ok(mut guard) = state.0.lock() {
+                                *guard = Some(client);
+                            }
+                            None
+                        }
+                    },
+                    None => {
+                        eprintln!("[cc-watcher] client cleared, stopping");
+                        break;
+                    }
+                };
+
+                if let Some(snapshot) = current_snapshot {
+                    if let Some(ref prev) = last_snapshot {
+                        let now_ms = chrono::Utc::now().timestamp_millis();
+                        let mut changed_tasks: Vec<FileChangeTask> = Vec::new();
+
+                        for (id, entry) in &snapshot {
+                            match prev.get(id) {
+                                None => {
+                                    changed_tasks.push(FileChangeTask {
+                                        id: uuid::Uuid::new_v4().to_string(),
+                                        project_id: project_id.clone(),
+                                        path: format!("{}/raw/sources/{}", project_path, entry.name),
+                                        kind: FileChangeKind::Created,
+                                        status: FileChangeStatus::Pending,
+                                        hash_before: None,
+                                        hash_after: None,
+                                        size: Some(entry.size),
+                                        mtime_ms: None,
+                                        created_at: now_ms,
+                                        updated_at: now_ms,
+                                        retry_count: 0,
+                                        error: None,
+                                        needs_rerun: false,
+                                    });
+                                }
+                                Some(prev_entry) if prev_entry.modify_date != entry.modify_date => {
+                                    changed_tasks.push(FileChangeTask {
+                                        id: uuid::Uuid::new_v4().to_string(),
+                                        project_id: project_id.clone(),
+                                        path: format!("{}/raw/sources/{}", project_path, entry.name),
+                                        kind: FileChangeKind::Modified,
+                                        status: FileChangeStatus::Pending,
+                                        hash_before: None,
+                                        hash_after: None,
+                                        size: Some(entry.size),
+                                        mtime_ms: None,
+                                        created_at: now_ms,
+                                        updated_at: now_ms,
+                                        retry_count: 0,
+                                        error: None,
+                                        needs_rerun: false,
+                                    });
+                                }
+                                _ => {}
+                            }
+                        }
+
+                        for (id, entry) in prev {
+                            if !snapshot.contains_key(id) {
+                                changed_tasks.push(FileChangeTask {
+                                    id: uuid::Uuid::new_v4().to_string(),
+                                    project_id: project_id.clone(),
+                                    path: format!("{}/raw/sources/{}", project_path, entry.name),
+                                    kind: FileChangeKind::Deleted,
+                                    status: FileChangeStatus::Pending,
+                                    hash_before: None,
+                                    hash_after: None,
+                                    size: Some(entry.size),
+                                    mtime_ms: None,
+                                    created_at: now_ms,
+                                    updated_at: now_ms,
+                                    retry_count: 0,
+                                    error: None,
+                                    needs_rerun: false,
+                                });
+                            }
+                        }
+
+                        if !changed_tasks.is_empty() {
+                            let _ = app.emit(
+                                EVENT_CHANGED,
+                                FileSyncPayload {
+                                    project_id: project_id.clone(),
+                                    tasks: changed_tasks,
+                                },
+                            );
+                        }
+                    }
+
+                    let snap = CoreContentSnapshot {
+                        folder_node_id: String::new(),
+                        last_poll: chrono::Utc::now().to_rfc3339(),
+                        nodes: snapshot.clone(),
+                    };
+                    if let Ok(json) = serde_json::to_string_pretty(&snap) {
+                        let _ = std::fs::write(&snapshot_path, json);
+                    }
+                    last_snapshot = Some(snapshot);
                 }
             }
         });
