@@ -208,6 +208,18 @@ export interface XecmConfig {
   pollIntervalSeconds: number
 }
 
+export interface CoreContentConfig {
+  enabled: boolean
+  baseUrl: string
+  folderNodeId: string
+  folderName: string
+  username: string
+  password: string
+  csrfToken: string
+  cookiesJson: string
+  pollIntervalSeconds: number
+}
+
 interface SourceWatchConfig {
   enabled: boolean
   autoIngest: boolean
@@ -329,6 +341,7 @@ interface WikiState {
   apiConfig: ApiConfig
   generalConfig: GeneralConfig
   xecmConfig: XecmConfig
+  coreContentConfig: CoreContentConfig
   dataVersion: number
 
   setProject: (project: WikiProject | null) => void
@@ -352,6 +365,7 @@ interface WikiState {
   setApiConfig: (config: ApiConfig) => void
   setGeneralConfig: (config: GeneralConfig) => void
   setXecmConfig: (config: XecmConfig) => void
+  setCoreContentConfig: (config: CoreContentConfig) => void
   bumpDataVersion: () => void
 }
 
@@ -474,6 +488,18 @@ export const useWikiStore = create<WikiState>((set) => ({
     pollIntervalSeconds: 30,
   },
 
+  coreContentConfig: {
+    enabled: false,
+    baseUrl: "",
+    folderNodeId: "",
+    folderName: "",
+    username: "",
+    password: "",
+    csrfToken: "",
+    cookiesJson: "",
+    pollIntervalSeconds: 30,
+  },
+
   setLlmConfig: (llmConfig) => set({ llmConfig }),
   setProviderConfigs: (providerConfigs) => set({ providerConfigs }),
   setActivePresetId: (activePresetId) => set({ activePresetId }),
@@ -487,6 +513,7 @@ export const useWikiStore = create<WikiState>((set) => ({
   setApiConfig: (apiConfig) => set({ apiConfig }),
   setGeneralConfig: (generalConfig) => set({ generalConfig }),
   setXecmConfig: (xecmConfig) => set({ xecmConfig }),
+  setCoreContentConfig: (coreContentConfig) => set({ coreContentConfig }),
   bumpDataVersion: () => set((state) => ({ dataVersion: state.dataVersion + 1 })),
 }))
 
