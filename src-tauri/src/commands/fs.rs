@@ -11,7 +11,7 @@ use office_oxide::Document;
 use crate::commands::file_sync;
 use crate::panic_guard::run_guarded;
 use crate::types::wiki::FileNode;
-use crate::core_content_client::{CoreContentClient, CoreContentError};
+use crate::core_content_client::CoreContentError;
 use crate::xecm_client::{XecmClient, XecmError};
 use crate::CoreContentState;
 use crate::XecmState;
@@ -92,7 +92,7 @@ pub async fn read_file(path: String, extract_images: Option<bool>, state: tauri:
     }
 
     if is_core_content_source(&cc_state, &path) {
-        let mut client = {
+        let client = {
             let mut guard = cc_state.0.lock().map_err(|e| format!("Core Content: {e}"))?;
             guard.take().ok_or("Core Content: client not configured")?
         };
