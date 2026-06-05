@@ -12,12 +12,15 @@ use panic_guard::run_guarded;
 use std::sync::Mutex;
 use tauri::Manager;
 
+use crate::core_content_client::{CoreContentClient, CoreContentConfig};
 use crate::xecm_client::{XecmClient, XecmConfig};
 
 struct CloseBehaviorState(Mutex<String>);
 struct TrayAvailabilityState(Mutex<bool>);
 
 struct XecmState(Mutex<Option<XecmClient>>);
+
+struct CoreContentState(Mutex<Option<CoreContentClient>>);
 
 #[tauri::command]
 fn clip_server_status() -> String {
@@ -125,6 +128,7 @@ fn set_close_behavior(
 fn set_xecm_config(
     config: Option<XecmConfig>,
     state: tauri::State<'_, XecmState>,
+    cc_state: tauri::State<'_, CoreContentState>,
 ) -> Result<String, String> {
     let mut guard = state
         .0
@@ -135,6 +139,8 @@ fn set_xecm_config(
             eprintln!("[xecm] set_xecm_config: enabled=true, url={}, ticket={}",
                 cfg.base_url,
                 cfg.ticket.as_deref().map(|_| "present").unwrap_or("MISSING"));
+            // Mutual exclusion: clear Core Content
+            if let Ok(mut g) = cc_state.0.lock() { *g = None; }
             *guard = Some(XecmClient::new(
                 cfg.clone(),
                 std::path::PathBuf::from(".llm-wiki/xecm-cache"),
@@ -146,6 +152,97 @@ fn set_xecm_config(
             *guard = None;
             Ok("xECM client cleared".to_string())
         }
+    }
+}
+
+/// Set/reset the active Core Content client. Clears xECM if enabled.
+#[tauri::command]
+fn set_core_content_config(
+    config: Option<CoreContentConfig>,
+    state: tauri::State<'_, CoreContentState>,
+    xecm_state: tauri::State<'_, XecmState>,
+) -> Result<String, String> {
+    let mut guard = state
+        .0
+        .lock()
+        .map_err(|_| "Core Content state is unavailable".to_string())?;
+    match config {
+        Some(ref cfg) if cfg.enabled => {
+            eprintln!("[core_content] set_core_content_config: enabled=true, url={}, folder={}",
+                cfg.base_url,
+                cfg.folder_name);
+            // Mutual exclusion: clear xECM
+            if let Ok(mut g) = xecm_state.0.lock() { *g = None; }
+            *guard = Some(CoreContentClient::new(
+                cfg.clone(),
+                std::path::PathBuf::from(".llm-wiki/core-content-cache"),
+            ));
+            Ok("Core Content client configured".to_string())
+        }
+        _ => {
+            eprintln!("[core_content] set_core_content_config: clearing client");
+            *guard = None;
+            Ok("Core Content client cleared".to_string())
+        }
+    }
+}
+
+/// Browse root folders for Core Content webview login flow.
+#[derive(serde::Serialize)]
+struct CoreContentConnectResult {
+    root_folders: Vec<serde_json::Value>,
+}
+
+/// Store session from webview login and list root folders.
+#[tauri::command]
+async fn core_content_connect_finish(
+    base_url: String,
+    csrf_token: String,
+    cookies_json: String,
+) -> Result<CoreContentConnectResult, String> {
+    let temp_config = CoreContentConfig {
+        enabled: true,
+        base_url: base_url.clone(),
+        folder_node_id: String::new(),
+        folder_name: String::new(),
+        username: String::new(),
+        password: String::new(),
+        csrf_token: csrf_token.clone(),
+        cookies_json: cookies_json.clone(),
+        poll_interval_seconds: 30,
+    };
+    let client = CoreContentClient::new(temp_config, std::env::temp_dir().join("cc-temp"));
+    let folders = client.list_root_folders().await.map_err(|e| e.to_string())?;
+
+    Ok(CoreContentConnectResult {
+        root_folders: folders
+            .into_iter()
+            .map(|f| serde_json::json!({
+                "id": f.id,
+                "name": f.name,
+            }))
+            .collect(),
+    })
+}
+
+/// Select a folder after webview login.
+#[tauri::command]
+fn core_content_select_folder(
+    folder_node_id: String,
+    folder_name: String,
+    state: tauri::State<'_, CoreContentState>,
+) -> Result<String, String> {
+    let mut guard = state
+        .0
+        .lock()
+        .map_err(|_| "Core Content state is unavailable".to_string())?;
+    match guard.as_mut() {
+        Some(client) => {
+            client.config.folder_node_id = folder_node_id;
+            client.config.folder_name = folder_name;
+            Ok("folder selected".to_string())
+        }
+        None => Err("No Core Content client configured".to_string()),
     }
 }
 
@@ -254,6 +351,7 @@ pub fn run() {
             app.manage(commands::file_sync::FileSyncState::default());
             app.manage(CloseBehaviorState(Mutex::new("minimize".to_string())));
             app.manage(XecmState(Mutex::new(None)));
+            app.manage(CoreContentState(Mutex::new(None)));
             let tray_available = match tray::create_tray(app.handle()) {
                 Ok(()) => true,
                 Err(err) => {
@@ -319,6 +417,9 @@ pub fn run() {
             set_close_behavior,
             set_xecm_config,
             xecm_connect,
+            set_core_content_config,
+            core_content_connect_finish,
+            core_content_select_folder,
         ])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {

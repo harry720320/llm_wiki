@@ -76,7 +76,7 @@ impl From<reqwest::Error> for CoreContentError {
 
 pub struct CoreContentClient {
     http: reqwest::Client,
-    config: CoreContentConfig,
+    pub config: CoreContentConfig,
     csrf_token: Mutex<String>,
     cache_dir: PathBuf,
 }
