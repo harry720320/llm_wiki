@@ -572,7 +572,12 @@ export function SettingsView() {
       case "changelog":
         return <ChangelogSection />
       case "xecm":
-        return <XecmSection draft={draft} setDraft={setDraft} />
+        return (
+          <>
+            <XecmSection draft={draft} setDraft={setDraft} />
+            <CoreContentSection draft={draft} setDraft={setDraft} />
+          </>
+        )
       case "about":
         return <AboutSection />
     }
