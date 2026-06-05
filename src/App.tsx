@@ -444,6 +444,32 @@ function App() {
     } catch (err) {
       console.error("[xecm] failed to hydrate config:", err)
     }
+
+    // Hydrate Core Content config
+    try {
+      const { loadCoreContentConfig } = await import("@/lib/project-store")
+      const savedCC = await loadCoreContentConfig(proj.path)
+      if (savedCC?.enabled) {
+        useWikiStore.getState().setCoreContentConfig(savedCC)
+        await invoke("set_core_content_config", { config: savedCC })
+        console.log("[core_content] hydrated config for folder", savedCC.folderName)
+      } else {
+        useWikiStore.getState().setCoreContentConfig({
+          enabled: false,
+          baseUrl: "",
+          folderNodeId: "",
+          folderName: "",
+          username: "",
+          password: "",
+          csrfToken: "",
+          cookiesJson: "",
+          pollIntervalSeconds: 30,
+        })
+        await invoke("set_core_content_config", { config: { enabled: false } })
+      }
+    } catch (err) {
+      console.error("[core_content] failed to hydrate config:", err)
+    }
   }
 
   async function handleSelectRecent(proj: WikiProject) {
@@ -486,6 +512,11 @@ function App() {
     // Clear xECM state on project switch
     try {
       await invoke("set_xecm_config", { config: { enabled: false } })
+    } catch {}
+
+    // Clear Core Content state on project switch
+    try {
+      await invoke("set_core_content_config", { config: { enabled: false } })
     } catch {}
 
     // Clear all per-project state BEFORE flipping back to the welcome screen
