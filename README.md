@@ -389,9 +389,9 @@ Configure in **Settings → Source Watch** by providing the xECM server URL, wor
 
 ### Pre-built Binaries
 
-Download from [Releases](https://github.com/harry720320/llm_wiki/releases):
+Download from [Releases](https://github.com/harry720320/llm_wiki/releases/latest):
+- **Windows**: [MSI Installer](https://github.com/harry720320/llm_wiki/releases/latest/download/LLM.Wiki_0.4.20_x64_en-US.msi) | [EXE Setup](https://github.com/harry720320/llm_wiki/releases/latest/download/LLM.Wiki_0.4.20_x64-setup.exe)
 - **macOS**: `.dmg` (Apple Silicon + Intel)
-- **Windows**: `.msi`
 - **Linux**: `.deb` / `.AppImage`
 
 ### Build from Source
