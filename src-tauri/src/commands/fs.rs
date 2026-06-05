@@ -11,7 +11,9 @@ use office_oxide::Document;
 use crate::commands::file_sync;
 use crate::panic_guard::run_guarded;
 use crate::types::wiki::FileNode;
+use crate::core_content_client::{CoreContentClient, CoreContentError};
 use crate::xecm_client::{XecmClient, XecmError};
+use crate::CoreContentState;
 use crate::XecmState;
 
 /// Known binary formats that need special extraction
@@ -36,8 +38,18 @@ fn xecm_err(e: XecmError) -> String {
     format!("xECM: {e}")
 }
 
+fn is_core_content_source(state: &tauri::State<'_, CoreContentState>, path: &str) -> bool {
+    state.0.lock().ok().map(|g| {
+        g.as_ref().map(|c| c.is_source_path(path)).unwrap_or(false)
+    }).unwrap_or(false)
+}
+
+fn cc_err(e: CoreContentError) -> String {
+    format!("Core Content: {e}")
+}
+
 #[tauri::command]
-pub async fn read_file(path: String, extract_images: Option<bool>, state: tauri::State<'_, XecmState>) -> Result<String, String> {
+pub async fn read_file(path: String, extract_images: Option<bool>, state: tauri::State<'_, XecmState>, cc_state: tauri::State<'_, CoreContentState>) -> Result<String, String> {
     if is_xecm_source(&state, &path) {
         let mut client = {
             let mut guard = state.0.lock().map_err(|e| format!("xECM: {e}"))?;
@@ -76,6 +88,47 @@ pub async fn read_file(path: String, extract_images: Option<bool>, state: tauri:
             let _ = std::fs::remove_file(&cache_path);
             return Ok(result);
         }
+        return Ok(text);
+    }
+
+    if is_core_content_source(&cc_state, &path) {
+        let mut client = {
+            let mut guard = cc_state.0.lock().map_err(|e| format!("Core Content: {e}"))?;
+            guard.take().ok_or("Core Content: client not configured")?
+        };
+        let node_id = match client.resolve_path(&path).await {
+            Ok(id) => id,
+            Err(e) => {
+                if let Ok(mut g) = cc_state.0.lock() { let _ = g.insert(client); }
+                return Err(cc_err(e));
+            }
+        };
+        let bytes = match client.get_content(&node_id).await {
+            Ok(b) => b,
+            Err(e) => {
+                if let Ok(mut g) = cc_state.0.lock() { let _ = g.insert(client); }
+                return Err(cc_err(e));
+            }
+        };
+        // Put client back
+        if let Ok(mut guard) = cc_state.0.lock() { let _ = guard.insert(client); }
+        let p = std::path::Path::new(&path);
+        let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+        if ext == "pdf" || OFFICE_EXTS.contains(&ext.as_str()) {
+            let cache_key = format!("{:x}", Md5::digest(path.as_bytes()));
+            let cache_path = std::env::temp_dir().join(format!("cc-{cache_key}.{ext}"));
+            std::fs::write(&cache_path, &bytes).map_err(|e| format!("Core Content: {e}"))?;
+            let result = if ext == "pdf" {
+                extract_pdf_text(&cache_path.to_string_lossy(), true)
+                    .map_err(|e| format!("Core Content: {e}"))?
+            } else {
+                extract_office_text(&cache_path.to_string_lossy(), &ext)
+                    .map_err(|e| format!("Core Content: {e}"))?
+            };
+            let _ = std::fs::remove_file(&cache_path);
+            return Ok(result);
+        }
+        let text = String::from_utf8_lossy(&bytes).to_string();
         return Ok(text);
     }
 
