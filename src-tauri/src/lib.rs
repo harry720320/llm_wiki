@@ -9,8 +9,10 @@ mod core_content_client;
 mod xecm_client;
 
 use panic_guard::run_guarded;
+use std::collections::HashMap;
 use std::sync::Mutex;
 use tauri::Manager;
+use tokio::sync::oneshot;
 
 use crate::core_content_client::{CoreContentClient, CoreContentConfig};
 use crate::xecm_client::{XecmClient, XecmConfig};
@@ -21,6 +23,14 @@ struct TrayAvailabilityState(Mutex<bool>);
 struct XecmState(Mutex<Option<XecmClient>>);
 
 struct CoreContentState(Mutex<Option<CoreContentClient>>);
+
+#[derive(serde::Serialize, Clone)]
+struct CoreContentLoginResult {
+    csrf_token: String,
+    cookies_json: String,
+}
+
+struct CCLoginChannels(Mutex<HashMap<String, oneshot::Sender<CoreContentLoginResult>>>);
 
 #[tauri::command]
 fn clip_server_status() -> String {
@@ -246,6 +256,116 @@ fn core_content_select_folder(
     }
 }
 
+/// Open a webview for Core Content login. Returns cookies once the user
+/// completes authentication (or after 120s timeout).
+#[tauri::command]
+async fn core_content_start_login(
+    app: tauri::AppHandle,
+    base_url: String,
+    state: tauri::State<'_, CCLoginChannels>,
+) -> Result<CoreContentLoginResult, String> {
+    let login_id = uuid::Uuid::new_v4().to_string();
+    let (tx, rx) = oneshot::channel();
+
+    {
+        let mut guard = state.0.lock().map_err(|e| format!("login channels unavailable: {e}"))?;
+        guard.insert(login_id.clone(), tx);
+    }
+
+    let webview = tauri::WebviewWindowBuilder::new(
+        &app,
+        &format!("core-content-login-{login_id}"),
+        tauri::WebviewUrl::External(
+            base_url
+                .parse()
+                .map_err(|e| format!("invalid base_url: {e}"))?,
+        ),
+    )
+    .title("Core Content Login")
+    .inner_size(800.0, 600.0)
+    .build()
+    .map_err(|e| format!("failed to create login window: {e}"))?;
+
+    // Inject JS that polls for the CSRF token cookie
+    let js = format!(
+        r#"(function() {{
+  var attempts = 0;
+  var maxAttempts = 120;
+  var poll = setInterval(function() {{
+    attempts++;
+    var cookies = document.cookie || '';
+    var hasToken = cookies.indexOf('CCM-XSRF-TOKEN') !== -1;
+    if (hasToken || attempts >= maxAttempts) {{
+      clearInterval(poll);
+      window.__TAURI_INTERNALS__.invoke('core_content_login_complete', {{
+        loginId: '{}',
+        cookies: hasToken ? cookies : ''
+      }});
+    }}
+  }}, 1000);
+}})();"#,
+        login_id
+    );
+    webview.eval(&js).map_err(|e| format!("failed to inject JS: {e}"))?;
+
+    // Wait for login result or channel drop
+    let result = rx.await.unwrap_or(CoreContentLoginResult {
+        csrf_token: String::new(),
+        cookies_json: String::new(),
+    });
+
+    // Close the webview
+    let _ = webview.close();
+
+    // Clean up any stale channel entry
+    if let Ok(mut guard) = state.0.lock() {
+        guard.remove(&login_id);
+    }
+
+    Ok(result)
+}
+
+/// Called by JS in the login webview when cookies are detected.
+#[tauri::command]
+fn core_content_login_complete(
+    login_id: String,
+    cookies: String,
+    state: tauri::State<'_, CCLoginChannels>,
+) -> Result<(), String> {
+    let tx = {
+        let mut guard = state
+            .0
+            .lock()
+            .map_err(|e| format!("login channels unavailable: {e}"))?;
+        guard.remove(&login_id)
+    };
+
+    if let Some(tx) = tx {
+        // Parse cookies: extract CSRF token and build JSON map
+        let mut csrf_token = String::new();
+        let mut cookies_map: HashMap<String, String> = HashMap::new();
+        for part in cookies.split(';') {
+            let trimmed = part.trim();
+            if let Some(eq) = trimmed.find('=') {
+                let name = trimmed[..eq].trim().to_string();
+                let value = trimmed[eq + 1..].trim().to_string();
+                if name == "CCM-XSRF-TOKEN" {
+                    csrf_token = value.clone();
+                }
+                cookies_map.insert(name, value);
+            }
+        }
+        let cookies_json = serde_json::to_string(&cookies_map).unwrap_or_default();
+
+        let _ = tx.send(CoreContentLoginResult {
+            csrf_token,
+            cookies_json,
+        });
+    }
+
+    Ok(())
+}
+
 #[derive(serde::Serialize)]
 struct XecmConnectResult {
     ticket: String,
@@ -352,6 +472,7 @@ pub fn run() {
             app.manage(CloseBehaviorState(Mutex::new("minimize".to_string())));
             app.manage(XecmState(Mutex::new(None)));
             app.manage(CoreContentState(Mutex::new(None)));
+            app.manage(CCLoginChannels(Mutex::new(HashMap::new())));
             let tray_available = match tray::create_tray(app.handle()) {
                 Ok(()) => true,
                 Err(err) => {
@@ -420,6 +541,8 @@ pub fn run() {
             set_core_content_config,
             core_content_connect_finish,
             core_content_select_folder,
+            core_content_start_login,
+            core_content_login_complete,
         ])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {

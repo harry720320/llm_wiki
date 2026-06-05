@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import type { SettingsDraft, DraftSetter } from "../settings-types"
-import { coreContentConnectFinish, coreContentSelectFolder, type CoreContentNode } from "@/commands/core-content"
+import { coreContentStartLogin, coreContentConnectFinish, coreContentSelectFolder, type CoreContentNode } from "@/commands/core-content"
 
 interface Props {
   draft: SettingsDraft
@@ -32,29 +32,24 @@ export function CoreContentSection({ draft, setDraft }: Props) {
     setConnecting(true)
     setConnectError(null)
     try {
-      // First pass: manual cookie entry via prompt.
-      // Full Tauri WebviewWindow auth + cookie extraction will be
-      // added in a follow-up task (OS-dependent cookie APIs).
-      const csrf = window.prompt(
-        "Log into Core Content in your browser, then paste the CCM-XSRF-TOKEN cookie value here:"
-      )
-      if (!csrf) throw new Error("CSRF token not provided")
+      // Open embedded webview for Core Content login.
+      // The Rust backend opens a WebviewWindow, injects JS that polls
+      // for CCM-XSRF-TOKEN, and returns cookies automatically.
+      const loginResult = await coreContentStartLogin(draft.coreContentBaseUrl)
 
-      // Get all cookies as JSON
-      const cookiesStr = window.prompt(
-        "Paste additional cookies as JSON {\"name\":\"value\",...} or leave empty:"
-      )
-      const cookiesJson = cookiesStr?.trim() || "{}"
+      if (!loginResult.csrfToken) {
+        throw new Error("Login did not complete. No CSRF token found.")
+      }
 
-      // Validate with backend
+      // Validate session and list root folders
       const result = await coreContentConnectFinish(
         draft.coreContentBaseUrl,
-        csrf,
-        cookiesJson,
+        loginResult.csrfToken,
+        loginResult.cookiesJson,
       )
       setFolders(result.rootFolders)
-      setDraft("coreContentCsrfToken", csrf)
-      setDraft("coreContentCookiesJson", cookiesJson)
+      setDraft("coreContentCsrfToken", loginResult.csrfToken)
+      setDraft("coreContentCookiesJson", loginResult.cookiesJson)
       setShowFolders(true)
       setConnectError(null)
     } catch (err) {

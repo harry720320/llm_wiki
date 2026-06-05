@@ -9,8 +9,19 @@ export interface CoreContentConnectResult {
   rootFolders: CoreContentNode[]
 }
 
+export interface CoreContentLoginResult {
+  csrfToken: string
+  cookiesJson: string
+}
+
 export function setCoreContentConfig(config: unknown): Promise<string> {
   return invoke<string>("set_core_content_config", { config })
+}
+
+export function coreContentStartLogin(
+  baseUrl: string,
+): Promise<CoreContentLoginResult> {
+  return invoke<CoreContentLoginResult>("core_content_start_login", { baseUrl })
 }
 
 export function coreContentConnectFinish(
