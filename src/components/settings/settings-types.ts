@@ -89,6 +89,17 @@ export interface SettingsDraft {
   xecmPassword: string
   xecmTicket: string
   xecmPollIntervalSeconds: number
+
+  // Core Content
+  coreContentEnabled: boolean
+  coreContentBaseUrl: string
+  coreContentFolderNodeId: string
+  coreContentFolderName: string
+  coreContentUsername: string
+  coreContentPassword: string
+  coreContentCsrfToken: string
+  coreContentCookiesJson: string
+  coreContentPollIntervalSeconds: number
 }
 
 export type DraftSetter = <K extends keyof SettingsDraft>(
