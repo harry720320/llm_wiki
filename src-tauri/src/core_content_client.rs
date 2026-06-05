@@ -86,12 +86,15 @@ impl CoreContentClient {
         let cookie_jar = std::sync::Arc::new(reqwest::cookie::Jar::default());
         if !config.cookies_json.is_empty() {
             if let Ok(cookies) = serde_json::from_str::<HashMap<String, String>>(&config.cookies_json) {
-                let domain_url = &config.base_url;
-                for (name, value) in &cookies {
-                    cookie_jar.add_cookie_str(
-                        &format!("{name}={value}"),
-                        &domain_url.parse().unwrap(),
-                    );
+                let base_url_parsed = base_origin(&config.base_url)
+                    .and_then(|o| reqwest::Url::parse(o).ok());
+                if let Some(ref base) = base_url_parsed {
+                    for (name, value) in &cookies {
+                        cookie_jar.add_cookie_str(
+                            &format!("{name}={value}"),
+                            base,
+                        );
+                    }
                 }
             }
         }
@@ -215,7 +218,10 @@ impl CoreContentClient {
         let dl_path = cms_links.get("urn:eim:linkrel:download-media").ok_or_else(|| {
             CoreContentError::NotFound("no download-media link".to_string())
         })?;
-        let dl_url = format!("https://corecontent.dev.ca.opentext.com{dl_path}");
+        let origin = base_origin(&self.config.base_url).ok_or_else(|| {
+            CoreContentError::Other("invalid base_url".to_string())
+        })?;
+        let dl_url = format!("{origin}{dl_path}");
 
         let bytes = self.download_bytes(&dl_url).await?;
 
@@ -285,6 +291,18 @@ fn extract_relative<'a>(normalized: &'a str, prefix: &str) -> Option<&'a str> {
         return Some("");
     }
     None
+}
+
+/// Extract `<scheme>://<host>` from a URL string.
+fn base_origin(url_str: &str) -> Option<&str> {
+    let scheme_end = url_str.find("://")?;
+    let auth_start = scheme_end + 3; // past "://"
+    // The host part ends at the next '/' or at the end of the string.
+    let auth_end = url_str[auth_start..]
+        .find('/')
+        .map(|i| auth_start + i)
+        .unwrap_or(url_str.len());
+    Some(&url_str[..auth_end])
 }
 
 fn cache_key_for(node: &CoreContentNode) -> String {
