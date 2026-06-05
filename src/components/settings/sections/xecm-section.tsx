@@ -89,7 +89,16 @@ export function XecmSection({ draft, setDraft }: Props) {
         <h2 className="text-lg font-semibold">{t("settings.xecm.title", "xECM Connection")}</h2>
       </div>
 
-      {draft.xecmEnabled && connected ? (
+      {draft.coreContentEnabled && (
+        <div className="rounded-md border border-amber-200 bg-amber-50 p-3 dark:border-amber-800 dark:bg-amber-950">
+          <p className="text-sm text-amber-700 dark:text-amber-300">
+            xECM is unavailable while Core Content is connected. Disconnect Core Content first.
+          </p>
+        </div>
+      )}
+
+      <div className={draft.coreContentEnabled ? "opacity-50 pointer-events-none" : ""}>
+        {draft.xecmEnabled && connected ? (
         <div className="space-y-4">
           <div className="rounded-md border border-green-200 bg-green-50 p-4 dark:border-green-800 dark:bg-green-950">
             <p className="text-sm font-medium text-green-700 dark:text-green-300">
@@ -195,6 +204,7 @@ export function XecmSection({ draft, setDraft }: Props) {
           </Button>
         </div>
       )}
+      </div>
     </div>
   )
 }

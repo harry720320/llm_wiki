@@ -43,6 +43,7 @@ import { ChangelogSection } from "./sections/changelog-section"
 import { MaintenanceSection } from "./sections/maintenance-section"
 import { AboutSection } from "./sections/about-section"
 import { XecmSection } from "./sections/xecm-section"
+import { CoreContentSection } from "./sections/core-content-section"
 
 type CategoryId =
   | "general"
@@ -99,6 +100,7 @@ function initialDraft(
   apiConfig: ReturnType<typeof useWikiStore.getState>["apiConfig"],
   generalConfig: ReturnType<typeof useWikiStore.getState>["generalConfig"],
   xecmConfig: ReturnType<typeof useWikiStore.getState>["xecmConfig"],
+  coreContentConfig: ReturnType<typeof useWikiStore.getState>["coreContentConfig"],
   maxHistoryMessages: number,
   uiLanguage: string,
   projectPath?: string,
@@ -170,6 +172,15 @@ function initialDraft(
     xecmPollIntervalSeconds: xecmConfig.pollIntervalSeconds,
     xecmPassword: xecmConfig.password ?? "",
     xecmTicket: xecmConfig.ticket ?? "",
+    coreContentEnabled: coreContentConfig.enabled,
+    coreContentBaseUrl: coreContentConfig.baseUrl,
+    coreContentFolderNodeId: coreContentConfig.folderNodeId,
+    coreContentFolderName: coreContentConfig.folderName,
+    coreContentUsername: coreContentConfig.username,
+    coreContentPassword: coreContentConfig.password ?? "",
+    coreContentCsrfToken: coreContentConfig.csrfToken ?? "",
+    coreContentCookiesJson: coreContentConfig.cookiesJson ?? "",
+    coreContentPollIntervalSeconds: coreContentConfig.pollIntervalSeconds,
   }
 }
 
@@ -222,6 +233,7 @@ export function SettingsView() {
       apiConfig,
       generalConfig,
       xecmConfig,
+      useWikiStore.getState().coreContentConfig,
       maxHistoryMessages,
       i18n.language,
       project?.path,
@@ -277,6 +289,7 @@ export function SettingsView() {
         apiConfig,
         generalConfig,
         xecmConfig,
+        useWikiStore.getState().coreContentConfig,
         maxHistoryMessages,
         prev.uiLanguage,
         project?.path,
@@ -539,7 +552,13 @@ export function SettingsView() {
       case "network":
         return <NetworkSection draft={draft} setDraft={setDraft} />
       case "source-watch":
-        return <SourceWatchSection draft={draft} setDraft={setDraft} projectReady={!!project} />
+        return (
+          <>
+            <SourceWatchSection draft={draft} setDraft={setDraft} projectReady={!!project} />
+            <XecmSection draft={draft} setDraft={setDraft} />
+            <CoreContentSection draft={draft} setDraft={setDraft} />
+          </>
+        )
       case "scheduled-import":
         return <ScheduledImportSection draft={draft} setDraft={setDraft} />
       case "api-server":
