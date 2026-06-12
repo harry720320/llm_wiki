@@ -481,6 +481,38 @@ export function SettingsView() {
       }
     }
 
+    // Core Content config — mirror the xECM block above.
+    const newCoreContent = {
+      enabled: draft.coreContentEnabled,
+      baseUrl: draft.coreContentBaseUrl.trim(),
+      folderNodeId: draft.coreContentFolderNodeId,
+      folderName: draft.coreContentFolderName,
+      username: draft.coreContentUsername,
+      password: draft.coreContentPassword || "",
+      csrfToken: draft.coreContentCsrfToken,
+      cookiesJson: draft.coreContentCookiesJson,
+      pollIntervalSeconds: Math.max(10, Math.min(300, draft.coreContentPollIntervalSeconds || 30)),
+    }
+    useWikiStore.getState().setCoreContentConfig(newCoreContent)
+    if (project) {
+      const { saveCoreContentConfig } = await import("@/lib/project-store")
+      await saveCoreContentConfig(newCoreContent, project.path)
+      // Push to Rust backend state so the poll watcher can use it
+      if (newCoreContent.enabled && newCoreContent.baseUrl && newCoreContent.folderNodeId) {
+        await invoke("set_core_content_config", { config: newCoreContent }).catch((err) =>
+          console.error("[core-content] failed to set config on Rust side:", err)
+        )
+        // Re-start file watcher with Core Content poll mode
+        const { startProjectFileSync, stopProjectFileSync } = await import("@/lib/project-file-sync")
+        await stopProjectFileSync().catch(() => {})
+        await startProjectFileSync(project, useWikiStore.getState().sourceWatchConfig).catch((err) =>
+          console.error("[core-content] failed to restart file sync:", err)
+        )
+      } else {
+        await invoke("set_core_content_config", { config: null }).catch(() => {})
+      }
+    }
+
     const newGeneralConfig = {
       autostart: draft.autostart,
       closeBehavior: draft.closeBehavior,
@@ -555,8 +587,6 @@ export function SettingsView() {
         return (
           <>
             <SourceWatchSection draft={draft} setDraft={setDraft} projectReady={!!project} />
-            <XecmSection draft={draft} setDraft={setDraft} />
-            <CoreContentSection draft={draft} setDraft={setDraft} />
           </>
         )
       case "scheduled-import":

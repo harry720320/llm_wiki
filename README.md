@@ -38,8 +38,9 @@
 - **Vector Semantic Search** — optional embedding-based retrieval via LanceDB, supports any OpenAI-compatible endpoint
 - **Persistent Ingest Queue** — serial processing with crash recovery, cancel, retry, and progress visualization
 - **Folder Import** — recursive folder import preserving directory structure, folder context as LLM classification hint
-- **Source Folder Auto-Watch** — detects external changes in `raw/sources/` and keeps ingest/delete cleanup in sync; supports local filesystem watch (notify) and xECM poll-based watch for enterprise content servers
+- **Source Folder Auto-Watch** — detects external changes in `raw/sources/` and keeps ingest/delete cleanup in sync; supports local filesystem watch (notify), xECM poll-based watch, and Core Content poll-based watch for enterprise content servers
 - **xECM (Extended ECM) Integration** — connect to OpenText Content Server repositories, browse and ingest documents directly from enterprise workspaces with on-demand content fetching and MD5-based caching
+- **Core Content Integration** — connect to OpenText Core Content SaaS, authenticate via embedded webview login, browse and select folders as source layers with on-demand content fetching and MD5-based caching
 - **Deep Research** — LLM-optimized search topics, multi-query web search via Tavily, SerpApi, or SearXNG, auto-ingest results into wiki
 - **Async Review System** — LLM flags items for human judgment, predefined actions, pre-generated search queries
 - **Chrome Web Clipper** — one-click web page capture with auto-ingest into knowledge base
@@ -366,6 +367,22 @@ Connect LLM Wiki directly to OpenText Extended ECM (Content Server) repositories
 
 Configure in **Settings → Source Watch** by providing the xECM server URL, workspace name, and credentials. When an xECM project is opened, LLM Wiki automatically hydrates the config and starts the poll watcher.
 
+### 20. Core Content Integration
+
+Connect LLM Wiki directly to OpenText Core Content SaaS — the cloud-based content management platform:
+
+- **Webview-based login** — embedded browser window handles Core Content's authentication flow, including multi-factor and SSO; injected JavaScript detects the `CCM-XSRF-TOKEN` cookie and signals completion to the Rust backend without any user-visible redirects
+- **HttpOnly cookie extraction** — full WebView2 cookie store access captures all session cookies including HttpOnly ones that `document.cookie` cannot read, enabling authenticated REST API calls from Rust
+- **Browse & select folders** — after login, the root folder tree is fetched and displayed; pick any folder as your source layer with client-side pagination (10 folders per page with Previous/Next navigation)
+- **Virtual `raw/sources/`** — Core Content documents appear as files under `raw/sources/` without local download; content is fetched on-demand with MD5-based caching (keyed on node ID + modify date)
+- **Poll-based change detection** — configurable polling interval (10–300 seconds) compares recursive snapshots to detect new, modified, and deleted documents
+- **Recursive snapshot** — iterative tree walk (stack-based) creates a full `HashMap<String, SnapshotEntry>` for change detection across deeply nested folder structures
+- **Full extract pipeline** — PDF and Office documents from Core Content go through the same text extraction pipeline as local files (pdfium + office_oxide)
+- **Mutually exclusive with xECM** — only one enterprise content source can be active at a time; connecting Core Content disables xECM and vice versa
+- **REST API pagination** — the Core Content API at `/cm/v1/node/{id}/nodes` respects `size` but ignores `page` for server-side pagination; the client fetches all items in a single request with `?page=0&size=200`
+
+Configure in **Settings → Core Content** by entering the Core Content base URL (e.g., `https://corecontent.dev.ca.opentext.com/subscriptions/avstcc`), clicking **Connect**, logging in through the webview, and selecting a folder. xECM and Core Content cannot be active simultaneously.
+
 ## Tech Stack
 
 | Layer | Technology |
@@ -384,6 +401,7 @@ Configure in **Settings → Source Watch** by providing the xECM server URL, wor
 | LLM | Streaming fetch (OpenAI, Anthropic, Google, Ollama, Custom) |
 | Web Search | Tavily, SerpApi, SearXNG JSON API |
 | xECM | OpenText Content Server REST API (OTCSTicket auth) |
+| Core Content | OpenText Core Content SaaS REST API (CSRF + cookie auth) |
 
 ## Installation
 

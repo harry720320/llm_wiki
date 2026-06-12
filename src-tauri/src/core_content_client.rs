@@ -3,18 +3,39 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
+fn deser_u64<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u64, D::Error> {
+    #[derive(serde::Deserialize)]
+    #[serde(untagged)]
+    enum NumOrStr { N(u64), S(String) }
+    match NumOrStr::deserialize(d)? {
+        NumOrStr::N(n) => Ok(n),
+        NumOrStr::S(s) => s.parse().map_err(serde::de::Error::custom),
+    }
+}
+
+fn deser_opt_u64<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<u64>, D::Error> {
+    #[derive(serde::Deserialize)]
+    #[serde(untagged)]
+    enum NumOrStrOrNull { N(u64), S(String), Null }
+    match NumOrStrOrNull::deserialize(d)? {
+        NumOrStrOrNull::N(n) => Ok(Some(n)),
+        NumOrStrOrNull::S(s) => s.parse().map(Some).map_err(serde::de::Error::custom),
+        NumOrStrOrNull::Null => Ok(None),
+    }
+}
+
 /// A single node returned by the Core Content REST API.
 #[derive(Debug, Clone, Deserialize)]
 pub struct CoreContentNode {
     pub id: String,
     pub name: String,
-    #[serde(default)]
-    pub container: bool,
-    #[serde(default)]
+    #[serde(default, alias = "container")]
+    pub is_container: bool,
+    #[serde(default, deserialize_with = "deser_u64")]
     pub size: u64,
     pub modify_date: Option<String>,
     pub mime_type: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deser_opt_u64")]
     pub content_size: Option<u64>,
     #[serde(default)]
     pub cms_links: Option<HashMap<String, String>>,
@@ -83,20 +104,29 @@ pub struct CoreContentClient {
 
 impl CoreContentClient {
     pub fn new(config: CoreContentConfig, cache_dir: PathBuf) -> Self {
+        eprintln!("[cc-client] new CoreContentClient: base_url={} folder_node_id={} folder_name={} cache_dir={}",
+            config.base_url, config.folder_node_id, config.folder_name, cache_dir.display());
         let cookie_jar = std::sync::Arc::new(reqwest::cookie::Jar::default());
         if !config.cookies_json.is_empty() {
             if let Ok(cookies) = serde_json::from_str::<HashMap<String, String>>(&config.cookies_json) {
                 let base_url_parsed = base_origin(&config.base_url)
                     .and_then(|o| reqwest::Url::parse(o).ok());
                 if let Some(ref base) = base_url_parsed {
+                    eprintln!("[cc-client] populating cookie jar with {} cookies for base={base}", cookies.len());
                     for (name, value) in &cookies {
                         cookie_jar.add_cookie_str(
                             &format!("{name}={value}"),
                             base,
                         );
                     }
+                } else {
+                    eprintln!("[cc-client] WARNING: could not parse base_url origin for cookie jar");
                 }
+            } else {
+                eprintln!("[cc-client] WARNING: failed to parse cookies_json");
             }
+        } else {
+            eprintln!("[cc-client] WARNING: cookies_json is empty");
         }
 
         let http = reqwest::Client::builder()
@@ -141,8 +171,22 @@ impl CoreContentClient {
         } else {
             format!("{}{}", self.config.base_url, path)
         };
+        let csrf = self.csrf_token.lock().ok().map(|s| s.clone()).unwrap_or_default();
+        eprintln!("[cc-client] GET {url}");
+        eprintln!("[cc-client] X-CCM-XSRF-TOKEN len={} val_first_8={}", csrf.len(), &csrf[..csrf.len().min(8)]);
         let resp = self.http.get(&url).headers(self.cc_headers()).send().await?;
-        Self::check_status(&resp)?;
+        let status = resp.status();
+        eprintln!("[cc-client] response status={status}");
+        if !status.is_success() {
+            let body_text = resp.text().await.unwrap_or_default();
+            eprintln!("[cc-client] response body={body_text}");
+            return Err(match status.as_u16() {
+                401 => CoreContentError::Auth("session expired".to_string()),
+                404 => CoreContentError::NotFound("node not found".to_string()),
+                429 => CoreContentError::RateLimited,
+                other => CoreContentError::Other(format!("HTTP {other}: {body_text}")),
+            });
+        }
         let body = resp.json().await?;
         Ok(body)
     }
@@ -166,38 +210,48 @@ impl CoreContentClient {
         })
     }
 
+    /// Fetch all items from a `/cm/v1/node/{id}/nodes` endpoint.
+    /// The Core Content REST API respects `size` but ignores `page` for
+    /// server-side pagination, so we request everything in one call.
+    async fn list_nodes_paginated(&self, node_id: &str) -> Result<Vec<CoreContentNode>, CoreContentError> {
+        let mut all_nodes: Vec<CoreContentNode> = Vec::new();
+        let mut seen_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+        let url = format!("/cm/v1/node/{node_id}/nodes?page=0&size=200");
+        eprintln!("[cc-client] list_nodes_paginated: GET {url}");
+        let resp: serde_json::Value = self.api_get(&url).await?;
+
+        let items = resp["_embedded"]["collection"]
+            .as_array()
+            .or_else(|| resp["data"].as_array())
+            .cloned()
+            .unwrap_or_default();
+
+        let total = resp["page"]["totalElements"].as_u64().unwrap_or(0);
+        eprintln!("[cc-client] list_nodes_paginated: got {} items, totalElements={total}", items.len());
+
+        for item in items {
+            if let Ok(node) = serde_json::from_value::<CoreContentNode>(item) {
+                if seen_ids.insert(node.id.clone()) {
+                    all_nodes.push(node);
+                }
+            }
+        }
+
+        eprintln!("[cc-client] list_nodes_paginated: {} unique items", all_nodes.len());
+        Ok(all_nodes)
+    }
+
     pub async fn list_root_folders(&self) -> Result<Vec<CoreContentNode>, CoreContentError> {
         let root: serde_json::Value = self.api_get("/cm/v1/node/root").await?;
         let root_id = root["id"].as_str().ok_or_else(|| CoreContentError::NotFound("root node has no id".to_string()))?;
 
-        let resp: serde_json::Value = self.api_get(&format!("/cm/v1/node/{root_id}/nodes")).await?;
-        let items = resp["_embedded"]["collection"]
-            .as_array()
-            .cloned()
-            .unwrap_or_default();
-
-        let nodes: Vec<CoreContentNode> = items
-            .into_iter()
-            .filter_map(|item| serde_json::from_value(item).ok())
-            .filter(|n: &CoreContentNode| n.container)
-            .collect();
-
-        Ok(nodes)
+        let all = self.list_nodes_paginated(root_id).await?;
+        Ok(all.into_iter().filter(|n| n.is_container).collect())
     }
 
     pub async fn list_directory(&self, node_id: &str) -> Result<Vec<CoreContentNode>, CoreContentError> {
-        let resp: serde_json::Value = self.api_get(&format!("/cm/v1/node/{node_id}/nodes")).await?;
-        let items = resp["_embedded"]["collection"]
-            .as_array()
-            .cloned()
-            .unwrap_or_default();
-
-        let nodes: Vec<CoreContentNode> = items
-            .into_iter()
-            .filter_map(|item| serde_json::from_value(item).ok())
-            .collect();
-
-        Ok(nodes)
+        self.list_nodes_paginated(node_id).await
     }
 
     pub async fn get_content(&self, node_id: &str) -> Result<Vec<u8>, CoreContentError> {
@@ -208,6 +262,7 @@ impl CoreContentClient {
 
         if cache_path.exists() {
             if let Ok(cached) = std::fs::read(&cache_path) {
+                eprintln!("[cc-client] get_content: cache hit node_id={node_id} cache_key={cache_key}");
                 return Ok(cached);
             }
         }
@@ -223,7 +278,9 @@ impl CoreContentClient {
         })?;
         let dl_url = format!("{origin}{dl_path}");
 
+        eprintln!("[cc-client] get_content: downloading node_id={node_id} name={} dl_url={dl_url}", node.name);
         let bytes = self.download_bytes(&dl_url).await?;
+        eprintln!("[cc-client] get_content: downloaded {} bytes, caching as {cache_key}", bytes.len());
 
         let _ = std::fs::create_dir_all(&self.cache_dir);
         let _ = std::fs::write(&cache_path, &bytes);
@@ -232,13 +289,14 @@ impl CoreContentClient {
     }
 
     pub async fn recursive_snapshot(&self) -> Result<HashMap<String, CoreContentSnapshotEntry>, CoreContentError> {
+        eprintln!("[cc-client] recursive_snapshot: starting from folder_node_id={}", self.config.folder_node_id);
         let mut snapshot = HashMap::new();
         let mut stack: Vec<String> = vec![self.config.folder_node_id.clone()];
 
         while let Some(node_id) = stack.pop() {
             let children = self.list_directory(&node_id).await?;
             for child in children {
-                if child.container {
+                if child.is_container {
                     stack.push(child.id);
                 } else {
                     snapshot.insert(child.id.clone(), CoreContentSnapshotEntry {
@@ -250,6 +308,7 @@ impl CoreContentClient {
             }
         }
 
+        eprintln!("[cc-client] recursive_snapshot: complete, {} entries found", snapshot.len());
         Ok(snapshot)
     }
 
@@ -347,7 +406,7 @@ mod tests {
         let node = CoreContentNode {
             id: "abc-123".into(),
             name: "test.pdf".into(),
-            container: false,
+            is_container: false,
             size: 100,
             modify_date: Some("2026-01-01T00:00:00".into()),
             mime_type: None,
@@ -365,7 +424,7 @@ mod tests {
         let mut node = CoreContentNode {
             id: "abc-123".into(),
             name: "test.pdf".into(),
-            container: false,
+            is_container: false,
             size: 100,
             modify_date: Some("2026-01-01T00:00:00".into()),
             mime_type: None,

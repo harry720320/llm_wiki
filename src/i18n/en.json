@@ -219,10 +219,10 @@
       "maintenance": "Maintenance",
       "changelog": "Changelog",
       "about": "About",
-      "xecm": "xECM Connection"
+      "xecm": "OpenText Integration"
     },
     "xecm": {
-      "title": "xECM Connection",
+      "title": "OpenText Integration",
       "baseUrl": "Base URL",
       "username": "Username",
       "password": "Password",

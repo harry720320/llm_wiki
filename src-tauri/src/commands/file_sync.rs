@@ -579,6 +579,7 @@ fn start_core_content_poll_watcher(
         eprintln!("[cc-watcher] poll watcher thread spawned");
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_time()
+            .enable_io()
             .build()
             .expect("Core Content poll watcher tokio runtime");
 
@@ -595,7 +596,7 @@ fn start_core_content_poll_watcher(
 
                 let state = app.state::<CoreContentState>();
 
-                let client_opt: Option<CoreContentClient> = {
+                let mut client = {
                     let mut guard = match state.0.lock() {
                         Ok(g) => g,
                         Err(_) => {
@@ -603,85 +604,40 @@ fn start_core_content_poll_watcher(
                             break;
                         }
                     };
-                    guard.take()
-                };
-
-                let current_snapshot = match client_opt {
-                    Some(client) => match client.recursive_snapshot().await {
-                        Ok(snap) => {
-                            if let Ok(mut guard) = state.0.lock() {
-                                *guard = Some(client);
-                            }
-                            Some(snap)
+                    match guard.take() {
+                        Some(c) => c,
+                        None => {
+                            eprintln!("[cc-watcher] client cleared, stopping");
+                            break;
                         }
-                        Err(e) => {
-                            eprintln!("[cc-watcher] snapshot failed: {e}");
-                            if let Ok(mut guard) = state.0.lock() {
-                                *guard = Some(client);
-                            }
-                            None
-                        }
-                    },
-                    None => {
-                        eprintln!("[cc-watcher] client cleared, stopping");
-                        break;
                     }
                 };
 
-                if let Some(snapshot) = current_snapshot {
-                    if let Some(ref prev) = last_snapshot {
-                        let now_ms = chrono::Utc::now().timestamp_millis();
-                        let mut changed_tasks: Vec<FileChangeTask> = Vec::new();
-
-                        for (id, entry) in &snapshot {
-                            match prev.get(id) {
-                                None => {
-                                    changed_tasks.push(FileChangeTask {
-                                        id: uuid::Uuid::new_v4().to_string(),
-                                        project_id: project_id.clone(),
-                                        path: format!("{}/raw/sources/{}", project_path, entry.name),
-                                        kind: FileChangeKind::Created,
-                                        status: FileChangeStatus::Pending,
-                                        hash_before: None,
-                                        hash_after: None,
-                                        size: Some(entry.size),
-                                        mtime_ms: None,
-                                        created_at: now_ms,
-                                        updated_at: now_ms,
-                                        retry_count: 0,
-                                        error: None,
-                                        needs_rerun: false,
-                                    });
-                                }
-                                Some(prev_entry) if prev_entry.modify_date != entry.modify_date => {
-                                    changed_tasks.push(FileChangeTask {
-                                        id: uuid::Uuid::new_v4().to_string(),
-                                        project_id: project_id.clone(),
-                                        path: format!("{}/raw/sources/{}", project_path, entry.name),
-                                        kind: FileChangeKind::Modified,
-                                        status: FileChangeStatus::Pending,
-                                        hash_before: None,
-                                        hash_after: None,
-                                        size: Some(entry.size),
-                                        mtime_ms: None,
-                                        created_at: now_ms,
-                                        updated_at: now_ms,
-                                        retry_count: 0,
-                                        error: None,
-                                        needs_rerun: false,
-                                    });
-                                }
-                                _ => {}
-                            }
+                let snapshot = match client.recursive_snapshot().await {
+                    Ok(snap) => snap,
+                    Err(e) => {
+                        eprintln!("[cc-watcher] snapshot failed: {e}");
+                        if let Ok(mut guard) = state.0.lock() {
+                            *guard = Some(client);
                         }
+                        continue;
+                    }
+                };
 
-                        for (id, entry) in prev {
-                            if !snapshot.contains_key(id) {
+                // ── Diff against last snapshot ──
+                let now_ms = chrono::Utc::now().timestamp_millis();
+                let mut changed_tasks: Vec<FileChangeTask> = Vec::new();
+
+                if let Some(ref prev) = last_snapshot {
+                    // New or modified
+                    for (id, entry) in &snapshot {
+                        match prev.get(id) {
+                            None => {
                                 changed_tasks.push(FileChangeTask {
                                     id: uuid::Uuid::new_v4().to_string(),
                                     project_id: project_id.clone(),
                                     path: format!("{}/raw/sources/{}", project_path, entry.name),
-                                    kind: FileChangeKind::Deleted,
+                                    kind: FileChangeKind::Created,
                                     status: FileChangeStatus::Pending,
                                     hash_before: None,
                                     hash_after: None,
@@ -694,29 +650,130 @@ fn start_core_content_poll_watcher(
                                     needs_rerun: false,
                                 });
                             }
-                        }
-
-                        if !changed_tasks.is_empty() {
-                            let _ = app.emit(
-                                EVENT_CHANGED,
-                                FileSyncPayload {
+                            Some(prev_entry) if prev_entry.modify_date != entry.modify_date => {
+                                changed_tasks.push(FileChangeTask {
+                                    id: uuid::Uuid::new_v4().to_string(),
                                     project_id: project_id.clone(),
-                                    tasks: changed_tasks,
-                                },
-                            );
+                                    path: format!("{}/raw/sources/{}", project_path, entry.name),
+                                    kind: FileChangeKind::Modified,
+                                    status: FileChangeStatus::Pending,
+                                    hash_before: None,
+                                    hash_after: None,
+                                    size: Some(entry.size),
+                                    mtime_ms: None,
+                                    created_at: now_ms,
+                                    updated_at: now_ms,
+                                    retry_count: 0,
+                                    error: None,
+                                    needs_rerun: false,
+                                });
+                            }
+                            _ => {}
                         }
                     }
-
-                    let snap = CoreContentSnapshot {
-                        folder_node_id: String::new(),
-                        last_poll: chrono::Utc::now().to_rfc3339(),
-                        nodes: snapshot.clone(),
-                    };
-                    if let Ok(json) = serde_json::to_string_pretty(&snap) {
-                        let _ = std::fs::write(&snapshot_path, json);
+                    // Deleted
+                    for (id, entry) in prev {
+                        if !snapshot.contains_key(id) {
+                            changed_tasks.push(FileChangeTask {
+                                id: uuid::Uuid::new_v4().to_string(),
+                                project_id: project_id.clone(),
+                                path: format!("{}/raw/sources/{}", project_path, entry.name),
+                                kind: FileChangeKind::Deleted,
+                                status: FileChangeStatus::Pending,
+                                hash_before: None,
+                                hash_after: None,
+                                size: Some(entry.size),
+                                mtime_ms: None,
+                                created_at: now_ms,
+                                updated_at: now_ms,
+                                retry_count: 0,
+                                error: None,
+                                needs_rerun: false,
+                            });
+                        }
                     }
-                    last_snapshot = Some(snapshot);
+                } else {
+                    // First poll — all entries are new
+                    for (_id, entry) in &snapshot {
+                        changed_tasks.push(FileChangeTask {
+                            id: uuid::Uuid::new_v4().to_string(),
+                            project_id: project_id.clone(),
+                            path: format!("{}/raw/sources/{}", project_path, entry.name),
+                            kind: FileChangeKind::Created,
+                            status: FileChangeStatus::Pending,
+                            hash_before: None,
+                            hash_after: None,
+                            size: Some(entry.size),
+                            mtime_ms: None,
+                            created_at: now_ms,
+                            updated_at: now_ms,
+                            retry_count: 0,
+                            error: None,
+                            needs_rerun: false,
+                        });
+                    }
                 }
+
+                // ── Download new/modified files to disk ──
+                let sources_dir = format!("{}/raw/sources", project_path);
+                let _ = std::fs::create_dir_all(&sources_dir);
+                for task in &changed_tasks {
+                    if task.kind == FileChangeKind::Deleted {
+                        continue;
+                    }
+                    // Resolve the snapshot entry by filename
+                    let node_id = match snapshot.iter().find(|(_, e)| {
+                        task.path.ends_with(&format!("/raw/sources/{}", e.name))
+                    }) {
+                        Some((id, _)) => id.clone(),
+                        None => continue,
+                    };
+                    let dest_path = format!("{}/{}", sources_dir, std::path::Path::new(&task.path)
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("unknown"));
+                    if std::path::Path::new(&dest_path).exists() {
+                        continue; // already downloaded
+                    }
+                    match client.get_content(&node_id).await {
+                        Ok(bytes) => {
+                            eprintln!("[cc-watcher] downloaded {} bytes to {}", bytes.len(), dest_path);
+                            if let Err(e) = std::fs::write(&dest_path, &bytes) {
+                                eprintln!("[cc-watcher] failed to write {}: {e}", dest_path);
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("[cc-watcher] failed to download {}: {}", task.path, e);
+                        }
+                    }
+                }
+
+                // Put client back
+                if let Ok(mut guard) = state.0.lock() {
+                    *guard = Some(client);
+                }
+
+                // ── Emit events ──
+                if !changed_tasks.is_empty() {
+                    let _ = app.emit(
+                        EVENT_CHANGED,
+                        FileSyncPayload {
+                            project_id: project_id.clone(),
+                            tasks: changed_tasks,
+                        },
+                    );
+                }
+
+                // ── Persist snapshot ──
+                let snap = CoreContentSnapshot {
+                    folder_node_id: String::new(),
+                    last_poll: chrono::Utc::now().to_rfc3339(),
+                    nodes: snapshot.clone(),
+                };
+                if let Ok(json) = serde_json::to_string_pretty(&snap) {
+                    let _ = std::fs::write(&snapshot_path, json);
+                }
+                last_snapshot = Some(snapshot);
             }
         });
     });

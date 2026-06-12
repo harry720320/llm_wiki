@@ -1,11 +1,13 @@
 import { useState } from "react"
 import { useTranslation } from "react-i18next"
-import { Cloud, CloudOff, Loader2 } from "lucide-react"
+import { Cloud, CloudOff, Loader2, ChevronLeft, ChevronRight } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import type { SettingsDraft, DraftSetter } from "../settings-types"
-import { coreContentStartLogin, coreContentConnectFinish, coreContentSelectFolder, type CoreContentNode } from "@/commands/core-content"
+import { coreContentStartLogin, coreContentSelectFolder, type CoreContentNode } from "@/commands/core-content"
+
+const FOLDERS_PER_PAGE = 10
 
 interface Props {
   draft: SettingsDraft
@@ -17,6 +19,7 @@ export function CoreContentSection({ draft, setDraft }: Props) {
   const [connecting, setConnecting] = useState(false)
   const [connectError, setConnectError] = useState<string | null>(null)
   const [folders, setFolders] = useState<CoreContentNode[]>([])
+  const [folderPage, setFolderPage] = useState(0)
   const [showFolders, setShowFolders] = useState(false)
   const [connected, setConnected] = useState(false)
   const [disconnecting, setDisconnecting] = useState(false)
@@ -32,22 +35,38 @@ export function CoreContentSection({ draft, setDraft }: Props) {
     setConnecting(true)
     setConnectError(null)
     try {
-      // Open embedded webview for Core Content login.
-      // The Rust backend opens a WebviewWindow, injects JS that polls
-      // for CCM-XSRF-TOKEN, and returns cookies automatically.
+      // Open embedded webview for Core Content login.  The webview JS
+      // detects the CSRF token, then calls the Core Content API directly
+      // (so HttpOnly session cookies are included).  The result carries
+      // both the CSRF token / cookies AND the root folder list.
       const loginResult = await coreContentStartLogin(draft.coreContentBaseUrl)
 
       if (!loginResult.csrfToken) {
         throw new Error("Login did not complete. No CSRF token found.")
       }
 
-      // Validate session and list root folders
-      const result = await coreContentConnectFinish(
-        draft.coreContentBaseUrl,
-        loginResult.csrfToken,
-        loginResult.cookiesJson,
-      )
-      setFolders(result.rootFolders)
+      // Parse the root folders fetched by the webview JS
+      let rootFolders: CoreContentNode[] = []
+      if (loginResult.rootFoldersJson) {
+        try {
+          const parsed = JSON.parse(loginResult.rootFoldersJson)
+          if (parsed.error) {
+            throw new Error(`Core Content API error: ${parsed.error}`)
+          }
+          if (Array.isArray(parsed)) {
+            rootFolders = parsed
+          }
+        } catch (parseErr) {
+          throw new Error(`Failed to list root folders: ${String(parseErr)}`)
+        }
+      }
+
+      if (rootFolders.length === 0) {
+        throw new Error("No root folders found. Check your Core Content permissions.")
+      }
+
+      setFolders(rootFolders)
+      setFolderPage(0)
       setDraft("coreContentCsrfToken", loginResult.csrfToken)
       setDraft("coreContentCookiesJson", loginResult.cookiesJson)
       setShowFolders(true)
@@ -136,20 +155,20 @@ export function CoreContentSection({ draft, setDraft }: Props) {
       ) : showFolders ? (
         <div className="space-y-4">
           <p className="text-sm text-muted-foreground">
-            Select a folder to use as your source layer:
+            Select a folder to use as your source layer ({folders.length} total):
           </p>
-          <div className="space-y-2">
-            {folders.map((f) => (
-              <button
-                key={f.id}
-                type="button"
-                onClick={() => handleSelectFolder(f)}
-                className="w-full rounded-md border px-4 py-3 text-left transition-colors hover:bg-accent hover:text-accent-foreground"
-              >
-                <div className="font-medium">{f.name}</div>
-              </button>
-            ))}
-          </div>
+          <FolderPageList
+            folders={folders}
+            page={folderPage}
+            perPage={FOLDERS_PER_PAGE}
+            onSelect={handleSelectFolder}
+          />
+          <FolderPagination
+            total={folders.length}
+            page={folderPage}
+            perPage={FOLDERS_PER_PAGE}
+            onPageChange={setFolderPage}
+          />
           <Button variant="ghost" size="sm" onClick={() => setShowFolders(false)}>
             Back
           </Button>
@@ -182,6 +201,75 @@ export function CoreContentSection({ draft, setDraft }: Props) {
           </Button>
         </div>
       )}
+    </div>
+  )
+}
+
+function FolderPageList({
+  folders,
+  page,
+  perPage,
+  onSelect,
+}: {
+  folders: CoreContentNode[]
+  page: number
+  perPage: number
+  onSelect: (folder: CoreContentNode) => void
+}) {
+  const start = page * perPage
+  const slice = folders.slice(start, start + perPage)
+  return (
+    <div className="space-y-2">
+      {slice.map((f) => (
+        <button
+          key={f.id}
+          type="button"
+          onClick={() => onSelect(f)}
+          className="w-full rounded-md border px-4 py-3 text-left transition-colors hover:bg-accent hover:text-accent-foreground"
+        >
+          <div className="font-medium">{f.name}</div>
+        </button>
+      ))}
+    </div>
+  )
+}
+
+function FolderPagination({
+  total,
+  page,
+  perPage,
+  onPageChange,
+}: {
+  total: number
+  page: number
+  perPage: number
+  onPageChange: (page: number) => void
+}) {
+  const totalPages = Math.max(1, Math.ceil(total / perPage))
+  if (totalPages <= 1) return null
+  return (
+    <div className="flex items-center justify-between text-sm text-muted-foreground">
+      <Button
+        variant="ghost"
+        size="sm"
+        disabled={page === 0}
+        onClick={() => onPageChange(page - 1)}
+      >
+        <ChevronLeft className="h-4 w-4 mr-1" />
+        Previous
+      </Button>
+      <span>
+        Page {page + 1} of {totalPages}
+      </span>
+      <Button
+        variant="ghost"
+        size="sm"
+        disabled={page >= totalPages - 1}
+        onClick={() => onPageChange(page + 1)}
+      >
+        Next
+        <ChevronRight className="h-4 w-4 ml-1" />
+      </Button>
     </div>
   )
 }

@@ -13,7 +13,7 @@ use tauri::{AppHandle, Manager};
 use tiny_http::{Header, Method, Response, Server, StatusCode};
 use walkdir::WalkDir;
 
-use crate::{clip_server, commands};
+use crate::{clip_server, commands, CCLoginChannels, CoreContentLoginResult};
 
 const PORT: u16 = 19828;
 const API_PREFIX: &str = "/api/v1";
@@ -223,6 +223,9 @@ fn handle_request(
             "mcpEnabled": api_mcp_enabled(app),
             "allowUnauthenticated": api_allow_unauthenticated(app),
         }));
+    }
+    if path == "/cc-login-callback" {
+        return handle_cc_login_callback(app, query, body);
     }
     if !path.starts_with(API_PREFIX) {
         return err(404, "Not found");
@@ -1213,6 +1216,157 @@ fn load_source_watch_config(
         )
         .ok()
     })
+}
+
+fn handle_cc_login_callback(app: &AppHandle, query: &str, body: &str) -> ApiResponse {
+    // Always parse query params (used for both login fields and base_url)
+    let params = parse_query(query);
+
+    // Try POST JSON body first, then fall back to query params (legacy GET navigation)
+    let (login_id, cookies, api_status, api_result, api_error, base_url) = if let Ok(val) = serde_json::from_str::<Value>(body) {
+        if val.is_object() {
+            (
+                val.get("login_id").and_then(Value::as_str).unwrap_or("").to_string(),
+                val.get("cookies").and_then(Value::as_str).unwrap_or("").to_string(),
+                val.get("api_status").and_then(Value::as_str).unwrap_or("").to_string(),
+                val.get("api_result").and_then(Value::as_str).unwrap_or("").to_string(),
+                val.get("api_error").and_then(Value::as_str).unwrap_or("").to_string(),
+                val.get("base_url").and_then(Value::as_str).unwrap_or("").to_string(),
+            )
+        } else {
+            (String::new(), String::new(), String::new(), String::new(), String::new(), String::new())
+        }
+    } else {
+        (
+            params.get("login_id").cloned().unwrap_or_default(),
+            params.get("cookies").cloned().unwrap_or_default(),
+            params.get("api_status").cloned().unwrap_or_default(),
+            params.get("api_result").cloned().unwrap_or_default(),
+            params.get("api_error").cloned().unwrap_or_default(),
+            params.get("base_url").cloned().unwrap_or_default(),
+        )
+    };
+
+    eprintln!("[cc-login] callback received login_id={login_id} cookies_len={} api_status={api_status} api_result_len={} api_error={api_error} base_url={base_url}",
+        cookies.len(), api_result.len());
+
+    if login_id.is_empty() {
+        return err(400, "Missing login_id");
+    }
+
+    let label = format!("core-content-login-{login_id}");
+
+    // Parse cookies from document.cookie (non-HttpOnly), then enrich with
+    // ALL cookies from WebView2's cookie store (which includes HttpOnly
+    // session cookies that document.cookie cannot read).
+    let mut csrf_token = String::new();
+    let mut cookies_map: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    for part in cookies.split(';') {
+        let trimmed = part.trim();
+        if let Some(eq) = trimmed.find('=') {
+            let name = trimmed[..eq].trim().to_string();
+            let value = trimmed[eq + 1..].trim().to_string();
+            if name == "CCM-XSRF-TOKEN" {
+                csrf_token = value.clone();
+            }
+            cookies_map.insert(name, value);
+        }
+    }
+
+    eprintln!("[cc-login] parsed {} cookies from document.cookie (non-HttpOnly only)", cookies_map.len());
+
+    // Enrich with HttpOnly cookies from the WebView2 cookie store BEFORE
+    // closing the webview. Query by the Core Content base URL origin
+    // rather than the webview's current URL (which is the callback URL
+    // and would return no Core Content cookies).
+    eprintln!("[cc-login] base_url for WebView2 cookie lookup: '{}'", base_url);
+    if let Some(webview) = app.get_webview_window(&label) {
+        let cookie_uri = if base_url.is_empty() {
+            let fallback = webview.url().ok().map(|u| u.to_string()).unwrap_or_default();
+            eprintln!("[cc-login] no base_url in callback, using webview current URL for cookie lookup: {fallback}");
+            fallback
+        } else {
+            base_url.clone()
+        };
+        eprintln!("[cc-login] extracting WebView2 cookies for uri={cookie_uri}");
+        match crate::cc_cookies::extract_all_cookies(&webview, &cookie_uri) {
+            Ok(all_cookies) => {
+                eprintln!("[cc-login] WebView2 returned {} total cookies (including HttpOnly)", all_cookies.len());
+                for (name, value) in all_cookies {
+                    cookies_map.insert(name, value);
+                }
+            }
+            Err(e) => {
+                eprintln!("[cc-login] WARNING: could not extract WebView2 cookies: {e}");
+            }
+        }
+
+        // If csrf_token wasn't found in document.cookie (the CSRF token is
+        // likely HttpOnly), pull it from the WebView2-enriched cookies_map.
+        if csrf_token.is_empty() {
+            if let Some(token) = cookies_map.get("CCM-XSRF-TOKEN") {
+                csrf_token = token.clone();
+                eprintln!("[cc-login] found CSRF token in WebView2 cookies (was HttpOnly, not visible to document.cookie)");
+            }
+        }
+    } else {
+        eprintln!("[cc-login] WARNING: webview window not found, skipping HttpOnly cookie enrichment");
+    }
+
+    // Close the webview window AFTER cookie extraction.
+    if let Some(webview) = app.get_webview_window(&label) {
+        eprintln!("[cc-login] closing webview window '{label}'");
+        if let Err(e) = webview.close() {
+            eprintln!("[cc-login] failed to close webview: {e}");
+        }
+    } else {
+        eprintln!("[cc-login] webview window '{label}' not found");
+    }
+
+    let cookies_json = serde_json::to_string(&cookies_map).unwrap_or_default();
+    eprintln!("[cc-login] final cookie count: {} (document.cookie + WebView2)", cookies_map.len());
+
+    // Build root_folders_json from the API result fetched by the webview JS.
+    // On error, include the error message so the frontend can display it.
+    let root_folders_json = if api_status == "ok" {
+        api_result
+    } else if !api_error.is_empty() {
+        format!("{{\"error\":\"{}\"}}", api_error.replace('"', "\\\""))
+    } else {
+        String::new()
+    };
+
+    eprintln!("[cc-login] csrf_token_len={} cookies_json_len={} root_folders_json_len={}",
+        csrf_token.len(), cookies_json.len(), root_folders_json.len());
+
+    let result = CoreContentLoginResult {
+        csrf_token,
+        cookies_json,
+        root_folders_json,
+    };
+
+    match app.try_state::<CCLoginChannels>() {
+        Some(state) => {
+            let mut guard = match state.0.lock() {
+                Ok(g) => g,
+                Err(_) => return err(500, "Internal server error"),
+            };
+            if let Some(tx) = guard.remove(&login_id) {
+                match tx.send(result) {
+                    Ok(()) => eprintln!("[cc-login] channel result sent to core_content_start_login"),
+                    Err(_) => eprintln!("[cc-login] channel receiver already dropped, result lost"),
+                }
+                ok(json!({
+                    "ok": true,
+                    "message": "Login complete. You may close this window."
+                }))
+            } else {
+                eprintln!("[cc-login] no channel found for login_id={login_id} (already consumed or expired)");
+                err(404, "Login session not found or expired")
+            }
+        }
+        None => err(503, "Server not ready"),
+    }
 }
 
 #[cfg(test)]

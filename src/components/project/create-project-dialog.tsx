@@ -151,7 +151,7 @@ export function CreateProjectDialog({ open: isOpen, onOpenChange, onCreated }: C
           </div>
           {error && <p className="text-sm text-destructive">{error}</p>}
           <p className="text-xs text-muted-foreground">
-            Tip: After creating your project, go to Settings &rarr; xECM Connection to link an OpenText xECM workspace as your document source layer.
+            Tip: After creating your project, go to Settings &rarr; OpenText Integration to link an OpenText workspace as your document source layer.
           </p>
         </div>
         <DialogFooter>

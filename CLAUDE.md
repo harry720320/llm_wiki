@@ -19,6 +19,16 @@ npx vitest run -- -t "pattern"  # Run tests matching a pattern
 
 The dev server runs on port 1420 with strict port checking. Tauri expects this exact port.
 
+**Important**: `npm run dev` and `npm run tauri dev` do NOT work on this machine — Sentinel One blocks the Vite dev server from binding to the port. To test changes, always run a full production build:
+
+```bash
+npm run tauri build
+```
+
+This produces installers under `src-tauri/target/release/bundle/`. Launch the installed app or the binary directly to test. Build time is ~15-20 minutes.
+
+**Before running `npm run tauri build`, ask for approval.** The full build takes significant time and the user may want to review the changes first.
+
 ## Architecture
 
 LLM Wiki is a **Tauri v2 desktop app** that implements Karpathy's LLM Wiki pattern: an LLM incrementally builds a structured, interlinked wiki from documents.
@@ -40,7 +50,8 @@ The `lib.rs` entry point registers all Tauri commands and plugins. Key modules:
 - **`commands/vectorstore.rs`** — LanceDB integration for optional vector semantic search
 - **`commands/claude_cli.rs` / `codex_cli.rs`** — Subprocess management for Claude Code / Codex CLI as LLM providers
 - **`commands/extract_images.rs`** — PDF/Office image extraction via pdfium + office_oxide
-- **`commands/file_sync.rs`** — File watcher for `raw/sources/` auto-detection
+- **`commands/file_sync.rs`** — File watcher for `raw/sources/` auto-detection (local, xECM, and Core Content)
+- **`core_content_client.rs`** — Core Content SaaS REST client: webview-based login, cookie extraction, folder listing, recursive snapshots, content download with MD5 cache
 - **`api_server.rs`** — HTTP API at `127.0.0.1:19828` for external agent integration
 - **`clip_server.rs`** — HTTP server at `127.0.0.1:19827` for Chrome extension communication
 - **`tray.rs`** — System tray icon with quick actions

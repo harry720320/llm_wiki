@@ -12,6 +12,8 @@ export interface CoreContentConnectResult {
 export interface CoreContentLoginResult {
   csrfToken: string
   cookiesJson: string
+  /** JSON array of CoreContentNode objects fetched by the webview JS. */
+  rootFoldersJson: string
 }
 
 export function setCoreContentConfig(config: unknown): Promise<string> {

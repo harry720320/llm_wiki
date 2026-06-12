@@ -86,7 +86,7 @@ export function XecmSection({ draft, setDraft }: Props) {
         ) : (
           <CloudOff className="h-5 w-5 text-muted-foreground" />
         )}
-        <h2 className="text-lg font-semibold">{t("settings.xecm.title", "xECM Connection")}</h2>
+        <h2 className="text-lg font-semibold">{t("settings.xecm.title", "OpenText Integration")}</h2>
       </div>
 
       {draft.coreContentEnabled && (
