@@ -38,8 +38,9 @@
 - **벡터 의미 검색** — LanceDB 기반의 선택적 임베딩 검색으로, OpenAI 호환 엔드포인트를 지원합니다
 - **영속 인제스트 큐** — 직렬 처리, 충돌 복구, 취소, 재시도, 진행 상황 시각화를 지원합니다
 - **폴더 가져오기** — 디렉터리 구조를 유지하며 재귀적으로 가져오고, 폴더 컨텍스트를 LLM 분류 힌트로 사용합니다
-- **소스 폴더 자동 감시** — `raw/sources/`의 외부 변경을 감지하고 인제스트/삭제 정리 흐름과 동기화합니다. 로컬 파일시스템 감시(notify)와 xECM 폴링 기반 감시(엔터프라이즈 콘텐츠 서버용)를 지원합니다
+- **소스 폴더 자동 감시** — `raw/sources/`의 외부 변경을 감지하고 인제스트/삭제 정리 흐름과 동기화합니다. 로컬 파일시스템 감시(notify), xECM 폴링 기반 감시, Core Content 폴링 기반 감시(엔터프라이즈 콘텐츠 서버용)를 지원합니다
 - **xECM (Extended ECM) 통합** — OpenText Content Server 리포지토리에 연결하여 엔터프라이즈 워크스페이스에서 문서를 직접 탐색하고 인제스트합니다 (주문형 콘텐츠 가져오기 및 MD5 기반 캐싱)
+- **Core Content 통합** — OpenText Core Content SaaS에 연결하여 임베디드 웹뷰 로그인으로 인증하고, 폴더를 찾아보고 선택하여 소스 레이어로 사용합니다 (주문형 콘텐츠 가져오기 및 MD5 기반 캐싱)
 - **Deep Research** — LLM에 최적화된 검색 주제와 Tavily, SerpApi, SearXNG 기반 다중 쿼리 웹 검색을 사용하고, 결과를 자동으로 Wiki에 인제스트합니다
 - **비동기 리뷰 시스템** — LLM이 사람의 판단이 필요한 항목을 표시하고, 사전 정의된 작업과 미리 생성된 검색 쿼리를 제공합니다
 - **Chrome Web Clipper** — 웹 페이지를 한 번의 클릭으로 캡처하고 지식 베이스에 자동 인제스트합니다
@@ -374,6 +375,22 @@ LLM Wiki를 OpenText Extended ECM(Content Server) 리포지토리에 직접 연�
 
 **설정 → Source Watch**에서 xECM 서버 URL, 워크스페이스 이름, 자격 증명을 구성하세요. xECM 프로젝트가 열리면 LLM Wiki가 자동으로 설정을 복원하고 폴링 감시를 시작합니다.
 
+### 20. Core Content 통합
+
+LLM Wiki를 OpenText Core Content SaaS(클라우드 기반 콘텐츠 관리 플랫폼)에 직접 연결합니다:
+
+- **웹뷰 기반 로그인** — 임베디드 브라우저 창이 Core Content의 인증 흐름(다중 인증 및 SSO 포함)을 처리합니다. 주입된 JavaScript가 `CCM-XSRF-TOKEN` 쿠키를 감지하고 사용자에게 보이는 리디렉션 없이 Rust 백엔드에 완료를 알립니다
+- **HttpOnly 쿠키 추출** — 전체 WebView2 쿠키 저장소 액세스를 통해 `document.cookie`로 읽을 수 없는 HttpOnly 세션 쿠키를 포함한 모든 세션 쿠키를 캡처하여 Rust에서 인증된 REST API 호출을 가능하게 합니다
+- **폴더 찾아보기 및 선택** — 로그인 후 루트 폴더 트리를 가져와 표시합니다. 클라이언트 측 페이지 매김(페이지당 10개 폴더, 이전/다음 탐색)으로 모든 폴더를 소스 레이어로 선택할 수 있습니다
+- **가상 `raw/sources/`** — Core Content 문서가 로컬 다운로드 없이 `raw/sources/` 아래 파일로 표시됩니다. 콘텐츠는 필요 시 가져오며 MD5 기반으로 캐싱됩니다(노드 ID + 수정 날짜를 키로 사용)
+- **폴링 기반 변경 감지** — 구성 가능한 폴링 간격(10~300초)으로 재귀적 스냅샷을 비교하여 새 문서, 수정된 문서, 삭제된 문서를 감지합니다
+- **재귀적 스냅샷** — 스택 기반 반복 트리 탐색으로 깊게 중첩된 폴더 구조의 변경 감지를 위한 완전한 `HashMap<String, SnapshotEntry>`를 생성합니다
+- **전체 추출 파이프라인** — Core Content의 PDF 및 Office 문서는 로컬 파일과 동일한 텍스트 추출 파이프라인(pdfium + office_oxide)을 통과합니다
+- **xECM과 상호 배타적** — 한 번에 하나의 엔터프라이즈 콘텐츠 소스만 활성화할 수 있습니다. Core Content에 연결하면 xECM이 비활성화되고 그 반대도 마찬가지입니다
+- **REST API 페이지 매김** — Core Content API의 `/cm/v1/node/{id}/nodes` 엔드포인트는 `size` 매개변수를 허용하지만 서버 측 페이지 매김을 위한 `page` 매개변수는 무시합니다. 클라이언트는 `?page=0&size=200`으로 단일 요청에서 모든 항목을 가져옵니다
+
+**설정 → Core Content**에서 Core Content 기본 URL(예: `https://corecontent.dev.ca.opentext.com/subscriptions/avstcc`)을 입력하고 **연결**을 클릭한 후 웹뷰를 통해 로그인하고 폴더를 선택하세요. xECM과 Core Content는 동시에 사용할 수 없습니다.
+
 ## 기술 스택
 
 | 계층 | 기술 |
@@ -392,6 +409,7 @@ LLM Wiki를 OpenText Extended ECM(Content Server) 리포지토리에 직접 연�
 | LLM | Streaming fetch(OpenAI, Anthropic, Google, Ollama, Custom) |
 | Web Search | Tavily, SerpApi, SearXNG JSON API |
 | xECM | OpenText Content Server REST API (OTCSTicket 인증) |
+| Core Content | OpenText Core Content SaaS REST API (CSRF + Cookie 인증) |
 
 ## 설치
 

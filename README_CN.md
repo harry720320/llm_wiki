@@ -38,8 +38,9 @@
 - **向量语义搜索** — 可选的 embedding 检索，基于 LanceDB，支持任意 OpenAI 兼容端点
 - **持久化摄入队列** — 串行处理，崩溃恢复，取消/重试，进度可视化
 - **文件夹导入** — 递归导入保留目录结构，文件夹路径作为 LLM 分类上下文
-- **Source 文件夹自动监听** — 检测 `raw/sources/` 的外部变更，并同步触发摄入或删除清理；支持本地文件系统监听（notify）和 xECM 轮询监听企业内容服务器
+- **Source 文件夹自动监听** — 检测 `raw/sources/` 的外部变更，并同步触发摄入或删除清理；支持本地文件系统监听（notify）、xECM 轮询监听和 Core Content 轮询监听企业内容服务器
 - **xECM（Extended ECM）集成** — 连接 OpenText Content Server 仓库，直接浏览和摄入企业工作区中的文档，按需获取内容并基于 MD5 缓存
+- **Core Content 集成** — 连接到 OpenText Core Content SaaS，通过内嵌浏览器登录认证，浏览和选择文件夹作为源层，按需获取内容并基于 MD5 缓存
 - **深度研究** — LLM 智能生成搜索主题，通过 Tavily、SerpApi 或 SearXNG 进行多查询网络搜索，研究结果自动摄入 Wiki
 - **异步审核系统** — LLM 在摄入时标记需人工判断的项，预定义操作，预生成搜索查询
 - **Chrome 网页剪藏** — 一键捕获网页内容，自动摄入知识库
@@ -366,6 +367,22 @@ LLM Wiki 是一个跨平台桌面应用，能将你的文档自动转化为有�
 
 在 **设置 → Source Watch** 中配置 xECM 服务器 URL、工作区名称和凭据。打开 xECM 项目时，LLM Wiki 会自动恢复配置并启动轮询监听。
 
+### 20. Core Content 集成
+
+将 LLM Wiki 直接连接到 OpenText Core Content SaaS —— 基于云的内容管理平台：
+
+- **内嵌浏览器登录** —— 嵌入式浏览器窗口处理 Core Content 的认证流程，包括多因素认证和 SSO；注入的 JavaScript 检测 `CCM-XSRF-TOKEN` cookie 并向 Rust 后端发出完成信号，无需任何用户可见的重定向
+- **HttpOnly cookie 提取** —— 完整的 WebView2 cookie 存储访问可捕获所有会话 cookie，包括 `document.cookie` 无法读取的 HttpOnly cookie，确保 Rust 端可进行经过身份验证的 REST API 调用
+- **浏览并选择文件夹** —— 登录后获取并显示根文件夹树；选择任意文件夹作为源层，支持客户端分页（每页 10 个文件夹，带上一页/下一页导航）
+- **虚拟 `raw/sources/`** —— Core Content 文档以文件形式出现在 `raw/sources/` 下，无需本地下载；内容按需获取，基于 MD5 缓存（以节点 ID + 修改日期为键）
+- **轮询变更检测** —— 可配置的轮询间隔（10–300 秒），通过比较递归快照来检测新增、修改和删除的文档
+- **递归快照** —— 基于栈的迭代树遍历，创建完整的 `HashMap<String, SnapshotEntry>` 用于深度嵌套文件夹结构的变更检测
+- **完整的提取管线** —— Core Content 中的 PDF 和 Office 文档经过与本地文件相同的文本提取管线（pdfium + office_oxide）
+- **与 xECM 互斥** —— 同一时间只能激活一个企业内容源；连接 Core Content 会禁用 xECM，反之亦然
+- **REST API 分页** —— Core Content API 的 `/cm/v1/node/{id}/nodes` 端点接受 `size` 参数，但忽略 `page` 参数进行服务器端分页；客户端通过 `?page=0&size=200` 在单个请求中获取所有项目
+
+在 **设置 → Core Content** 中，输入 Core Content 基础 URL（例如 `https://corecontent.dev.ca.opentext.com/subscriptions/avstcc`），点击 **连接**，通过浏览器窗口登录，然后选择文件夹。xECM 和 Core Content 不能同时使用。
+
 ## 技术栈
 
 | 层级 | 技术 |
@@ -384,6 +401,7 @@ LLM Wiki 是一个跨平台桌面应用，能将你的文档自动转化为有�
 | LLM | 流式 fetch（OpenAI、Anthropic、Google、Ollama、自定义） |
 | 网络搜索 | Tavily、SerpApi、SearXNG JSON API |
 | xECM | OpenText Content Server REST API（OTCSTicket 认证） |
+| Core Content | OpenText Core Content SaaS REST API（CSRF + cookie 认证） |
 
 ## 安装
 
